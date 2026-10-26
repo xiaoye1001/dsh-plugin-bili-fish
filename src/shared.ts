@@ -7,6 +7,7 @@ export const SKIP_REASONS = [
   'dry_run_not_explicit',
   'dependency_missing',
   'voice_disabled',
+  'already_commented',
   'voice_unsupported',
 ] as const
 export type SkipReason = typeof SKIP_REASONS[number]

@@ -131,7 +131,7 @@ test('bili_comment sends via bilibili-mcp without parentRpid, then rate-limits',
   assert.equal(calls.length, 1)
   assert.deepEqual(calls[0].args, { videoId: VIDEO, message: COMMENT })
 
-  const again = await run('bili_comment', { videoId: VIDEO, text: COMMENT, dryRun: false })
+  const again = await run('bili_comment', { videoId: 'BV1zz411c7mD', text: COMMENT, dryRun: false })
   assert.equal(again.isError, false)
   assert.equal(again.value.skipped, true)
   assert.equal(again.value.reason, 'rate_limited')

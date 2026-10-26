@@ -9,9 +9,9 @@
  */
 export const API_BASE = '/api/bili-fish'
 
-export type Endpoint = 'state' | 'save' | 'check'
+export type Endpoint = 'state' | 'save' | 'check' | 'explore'
 
-export const ENDPOINTS: readonly Endpoint[] = ['state', 'save', 'check']
+export const ENDPOINTS: readonly Endpoint[] = ['state', 'save', 'check', 'explore']
 
 /** Absolute route path for one endpoint, e.g. `/api/bili-fish/state`. */
 export function endpointPath(endpoint: Endpoint): string {
@@ -30,6 +30,17 @@ export interface EditableSettings {
   tts: { defaultVoice: string }
   voiceFallback: { enabled: boolean; uploadUrl: string; template: string }
   persona: { override: string; extra: string }
+  commentOncePerVideoHours: number
+  explore: {
+    enabled: boolean
+    interests: string[]
+    intervalMin: number
+    activeFrom: number
+    activeTo: number
+    watchPerRound: number
+    commentsPerRound: number
+    send: boolean
+  }
   autoReply: {
     enabled: boolean
     videos: string[]
@@ -38,6 +49,17 @@ export interface EditableSettings {
     send: boolean
     skipNames: string[]
   }
+}
+
+/** Live state of exploration. */
+export interface ExploreStatus {
+  enabled: boolean
+  active: boolean
+  lastWakeAt: number | null
+  lastKeyword: string | null
+  nextKeyword: string | null
+  lastError: string | null
+  sessionId: string
 }
 
 /** Live state of the auto-reply patrol. */
@@ -79,6 +101,8 @@ export interface PanelState {
   /** Built-in persona text, so the page can show what “override” replaces. */
   defaultPersona: string
   autoReplyStatus: AutoReplyStatus
+  exploreStatus: ExploreStatus
+  recentlyCommented: string[]
 }
 
 export interface SaveRequest {

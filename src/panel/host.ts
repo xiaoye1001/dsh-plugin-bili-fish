@@ -13,6 +13,7 @@ import { configProblems, type Settings } from '../config.js'
 import type { SendGuard } from '../guard.js'
 import { FISH_PERSONA } from '../persona.js'
 import type { ReplyPatrol } from '../autoreply/watcher.js'
+import type { Explorer } from '../explore/explorer.js'
 import type { BiliClient } from '../bili-client.js'
 import { resolveTts } from '../tts.js'
 import {
@@ -37,13 +38,14 @@ export interface PanelDeps {
   /** Local profile entry id of this plugin instance, if loaded from one. */
   entryId: string | undefined
   patrol: ReplyPatrol
+  explorer: Explorer
 }
 
 const ok = <T>(value: T): RpcResult<T> => ({ ok: true, value })
 const fail = <T = never>(code: string, message: string, details: object = {}): RpcResult<T> =>
   ({ ok: false, error: { code, message, details } })
 
-export function buildState({ ctx, settings, guard, bili, entryId, patrol }: PanelDeps): PanelState {
+export function buildState({ ctx, settings, guard, bili, entryId, patrol, explorer }: PanelDeps): PanelState {
   const s = settings()
   return {
     settings: pickEditable(s),
@@ -64,6 +66,8 @@ export function buildState({ ctx, settings, guard, bili, entryId, patrol }: Pane
     persistence: persistence(ctx, entryId),
     defaultPersona: FISH_PERSONA,
     autoReplyStatus: patrol.status(),
+    exploreStatus: explorer.status(),
+    recentlyCommented: guard.recentlyCommented(),
   }
 }
 
@@ -83,6 +87,17 @@ function pickEditable(s: Settings): EditableSettings {
       template: s.voiceFallback.template,
     },
     persona: { override: s.persona.override, extra: s.persona.extra },
+    commentOncePerVideoHours: s.commentOncePerVideoHours,
+    explore: {
+      enabled: s.explore.enabled,
+      interests: [...s.explore.interests],
+      intervalMin: s.explore.intervalMin,
+      activeFrom: s.explore.activeFrom,
+      activeTo: s.explore.activeTo,
+      watchPerRound: s.explore.watchPerRound,
+      commentsPerRound: s.explore.commentsPerRound,
+      send: s.explore.send,
+    },
     autoReply: {
       enabled: s.autoReply.enabled,
       videos: [...s.autoReply.videos],
@@ -156,6 +171,7 @@ export function validatePatch(input: unknown): { patch: Record<string, unknown> 
   const root = obj('patch', input, [
     'sendEnabled', 'dryRunByDefault', 'maxCommentsPerDay', 'maxRepliesPerDay', 'minIntervalMs',
     'replyDedupeWindowMs', 'voiceEnabled', 'tts', 'voiceFallback', 'persona', 'autoReply',
+    'commentOncePerVideoHours', 'explore',
   ], problems)
   if (!root) return { problems }
   const patch: Record<string, unknown> = {}
@@ -194,6 +210,24 @@ export function validatePatch(input: unknown): { patch: Record<string, unknown> 
       if ('override' in p) out.override = str('persona.override', p.override, 8000, problems)
       if ('extra' in p) out.extra = str('persona.extra', p.extra, 2000, problems)
       patch.persona = out
+    }
+  }
+  if ('commentOncePerVideoHours' in root) {
+    set('commentOncePerVideoHours', int('commentOncePerVideoHours', root.commentOncePerVideoHours, 1, 24 * 365, problems))
+  }
+  if ('explore' in root) {
+    const e = obj('explore', root.explore, ['enabled', 'interests', 'intervalMin', 'activeFrom', 'activeTo', 'watchPerRound', 'commentsPerRound', 'send'], problems)
+    if (e) {
+      const out: Record<string, unknown> = {}
+      if ('enabled' in e) out.enabled = bool('explore.enabled', e.enabled, problems)
+      if ('send' in e) out.send = bool('explore.send', e.send, problems)
+      if ('interests' in e) out.interests = strList('explore.interests', e.interests, 30, problems)
+      if ('intervalMin' in e) out.intervalMin = int('explore.intervalMin', e.intervalMin, 30, 24 * 60, problems)
+      if ('activeFrom' in e) out.activeFrom = int('explore.activeFrom', e.activeFrom, 0, 23, problems)
+      if ('activeTo' in e) out.activeTo = int('explore.activeTo', e.activeTo, 1, 24, problems)
+      if ('watchPerRound' in e) out.watchPerRound = int('explore.watchPerRound', e.watchPerRound, 1, 5, problems)
+      if ('commentsPerRound' in e) out.commentsPerRound = int('explore.commentsPerRound', e.commentsPerRound, 0, 3, problems)
+      patch.explore = out
     }
   }
   if ('autoReply' in root) {
@@ -236,6 +270,11 @@ export async function dispatch(deps: PanelDeps, endpoint: string, payload: unkno
         // Run one patrol round now (it still respects every switch and limit).
         if (!deps.settings().autoReply.enabled) return fail('disabled', '自动回复未开启')
         await deps.patrol.runRound()
+        return ok(buildState(deps))
+      case 'explore':
+        // Wake the exploration session once now (still within every limit; ignores the interval, not the switch).
+        if (!deps.settings().explore.enabled) return fail('disabled', '自己逛未开启')
+        await deps.explorer.round()
         return ok(buildState(deps))
       default:
         return fail('unknown-endpoint', `unknown endpoint "${endpoint}"`)

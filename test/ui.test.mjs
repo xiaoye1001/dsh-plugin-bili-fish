@@ -100,6 +100,7 @@ test('settings page renders, edits, confirms and saves through the host', async 
 
   await page.getByText('今日（').waitFor()
   await page.getByRole('heading', { name: '自动回复' }).waitFor()
+  await page.getByRole('heading', { name: '自己逛' }).waitFor()
   await page.getByText('bilibili-mcp 未连接').waitFor()
   mkdirSync(new URL('../artifacts/', import.meta.url), { recursive: true })
   await page.screenshot({ path: new URL('../artifacts/settings-page.png', import.meta.url).pathname, fullPage: true })

@@ -139,7 +139,7 @@ test('saving keeps today’s counters (no plugin remount)', async () => {
   await tool('bili_comment', { videoId: VIDEO, text: COMMENT, dryRun: false })
   const saved = await rpc('save', { patch: { maxCommentsPerDay: 1 }, revision: 3 })
   assert.equal(saved.value.usage.comments, 1)
-  const blocked = await tool('bili_comment', { videoId: VIDEO, text: COMMENT, dryRun: false })
+  const blocked = await tool('bili_comment', { videoId: 'BV1zz411c7mD', text: COMMENT, dryRun: false })
   assert.equal(blocked.value.reason, 'rate_limited')
 })
 
@@ -284,4 +284,35 @@ test('auto-reply settings: defaults, save, validation, and check gating', async 
   const checked = await rpc('check', null)
   assert.equal(checked.ok, true)
   assert.match(checked.value.autoReplyStatus.lastError, /依赖缺失/)
+})
+
+test('exploration settings: save, validation, and explore gating', async () => {
+  const { rpc } = await boot()
+  const state = await rpc('state', null)
+  assert.equal(state.value.settings.explore.enabled, false)
+  assert.equal(state.value.settings.commentOncePerVideoHours, 168)
+  assert.equal(state.value.exploreStatus.sessionId, 'bili-fish-explore')
+
+  const off = await rpc('explore', null)
+  assert.equal(off.error.code, 'disabled')
+
+  for (const [patch, pattern] of [
+    [{ explore: { intervalMin: 5 } }, /30/],
+    [{ explore: { activeFrom: 20, activeTo: 8 } }, /activeFrom/],
+    [{ explore: { watchPerRound: 1, commentsPerRound: 3 } }, /commentsPerRound/],
+    [{ explore: { sessionId: 'x' } }, /不允许修改/],
+    [{ commentOncePerVideoHours: 0 }, /1～/],
+  ]) {
+    const r = await rpc('save', { patch, revision: 3 })
+    assert.equal(r.ok, false, JSON.stringify(patch))
+    assert.match(r.error.message, pattern, JSON.stringify(patch))
+  }
+  const saved = await rpc('save', { patch: { explore: { enabled: true, interests: ['猫', '猫', '做饭'], commentsPerRound: 0 } }, revision: 3 })
+  assert.equal(saved.ok, true, JSON.stringify(saved))
+  assert.deepEqual(saved.value.settings.explore.interests, ['猫', '做饭'])
+  assert.equal(saved.value.exploreStatus.nextKeyword, '猫')
+  // Enabled: a manual round runs and reports that the session service is missing in this harness.
+  const ran = await rpc('explore', null)
+  assert.equal(ran.ok, true)
+  assert.match(ran.value.exploreStatus.lastError, /会话服务不可用/)
 })

@@ -86,6 +86,29 @@ export class BiliClient {
     return this.call(tool, { ...input }, exec)
   }
 
+  /**
+   * Run a bilibili-mcp read tool as a nested call of `exec` and return its text.
+   * Read tools are not write-guarded, but nesting keeps the call logged under
+   * the plugin tool that made it and cancels with it.
+   */
+  async readText(name: string, args: Record<string, unknown>, exec: ToolRunContext): Promise<string> {
+    const result = await this.ctx.tools.execute({
+      callId: `${exec.callId}:bili-fish-read:${++this.seq}` as ToolCallId,
+      rootCallId: exec.rootCallId,
+      name,
+      arguments: args,
+      signal: exec.signal,
+      parent: exec.token,
+      ...(exec.agent !== undefined ? { agent: exec.agent } : {}),
+    })
+    if (result.isError) throw new Error(result.error.message)
+    const content = (result.value as { content?: unknown } | null)?.content
+    if (!Array.isArray(content)) return ''
+    return content
+      .map(b => (b as { type?: unknown; text?: unknown })?.type === 'text' ? String((b as { text: unknown }).text) : '')
+      .join('\n')
+  }
+
   private async call(name: string, args: Record<string, string>, exec: ToolRunContext): Promise<PostResult> {
     this.inFlight.add(exec.token)
     try {

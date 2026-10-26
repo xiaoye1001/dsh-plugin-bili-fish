@@ -37,6 +37,11 @@ export function createCommentTool({ settings, guard, bili }: ToolDeps): ToolDefi
       const text = args.text.trim()
       assertLength('评论', text, config.commentLength)
 
+      // One comment per video within commentOncePerVideoHours, drafts included, so the model knows early.
+      if (guard.wasCommented(args.videoId)) {
+        return skipped('already_commented', `最近 ${config.commentOncePerVideoHours} 小时内已经评论过这个视频`)
+      }
+
       const decision = decideSend(config, args.dryRun)
       if (decision.mode === 'draft') return { rpid: 'dry-run', message: '草稿：' + text }
       if (decision.mode === 'skip') return decision.result
@@ -45,6 +50,8 @@ export function createCommentTool({ settings, guard, bili }: ToolDeps): ToolDefi
       const slot = guard.reserve('comment')
       if (!slot.ok) return skipped('rate_limited', slot.message)
 
+      // Mark before the await so a concurrent call on the same video is refused too.
+      guard.markCommented(args.videoId)
       // parentRpid omitted on purpose: a top-level comment.
       const posted = await bili.postText({ videoId: args.videoId, message: text }, exec)
       return { rpid: posted.rpid, message: posted.rpid ? '已发送' : '已发送（未能从返回中解析 rpid）' }

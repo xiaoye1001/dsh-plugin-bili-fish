@@ -14,6 +14,10 @@ import { Config, assertConfig, resolveSettings } from './config.js'
 import { SendGuard } from './guard.js'
 import { installPanelHost } from './panel/host.js'
 import { ReplyPatrol } from './autoreply/watcher.js'
+import { Explorer } from './explore/explorer.js'
+import { SessionDoor } from './session.js'
+import { createDiscoverTool } from './tools/discover.js'
+import { createWatchTool } from './tools/watch.js'
 import { createBuildPromptTool } from './tools/build-prompt.js'
 import { createCommentTool } from './tools/comment.js'
 import { createReplyTool } from './tools/reply.js'
@@ -47,6 +51,8 @@ export function apply(ctx: Context, config: Config) {
   ctx.tools.register(createCommentTool(deps))
   ctx.tools.register(createReplyTool(deps))
   ctx.tools.register(createSendVoiceTool(deps))
+  ctx.tools.register(createDiscoverTool(deps))
+  ctx.tools.register(createWatchTool(deps))
 
   // Keep the model from calling bilibili write tools directly and skipping the guard above.
   ctx.tools.guard((execution) => {
@@ -56,12 +62,17 @@ export function apply(ctx: Context, config: Config) {
     return deps.bili.guardDirectCall(execution, blocked)
   })
 
-  const patrol = new ReplyPatrol({ ctx, settings, isOwnComment: rpid => deps.bili.isOwnComment(rpid) })
+  const door = new SessionDoor(ctx)
+  door.install()
+  const patrol = new ReplyPatrol({ ctx, settings, door, isOwnComment: rpid => deps.bili.isOwnComment(rpid) })
   patrol.install()
+  const explorer = new Explorer({ ctx, settings, door, recentlyCommented: () => deps.guard.recentlyCommented() })
+  explorer.install()
 
   installPanelHost({
     ...deps,
     patrol,
+    explorer,
     entryId: (ctx.fiber as { entry?: { options?: { id?: string } } }).entry?.options?.id,
   })
 

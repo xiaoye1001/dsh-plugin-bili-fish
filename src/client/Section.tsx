@@ -174,6 +174,12 @@ export function localProblems(d: EditableSettings): string[] {
     if (!/^https?:\/\/\S+$/.test(d.voiceFallback.uploadUrl)) p.push('开启降级时需要填写 http(s) 上传地址')
     if (!d.voiceFallback.template.includes('{url}')) p.push('降级模板必须包含 {url}')
   }
+  const ex = d.explore
+  if (!(Number.isInteger(ex.intervalMin) && ex.intervalMin >= 30)) p.push('自己逛的间隔不能低于 30 分钟')
+  if (!(ex.activeFrom >= 0 && ex.activeTo <= 24 && ex.activeFrom < ex.activeTo)) p.push('活跃时段需要“开始”早于“结束”（0～24 点）')
+  if (ex.commentsPerRound > ex.watchPerRound) p.push('每轮评论数不能多于每轮观看数')
+  if (ex.interests.some(k => k.length > 30) || ex.interests.length > 30) p.push('兴趣关键词最多 30 个，每个不超过 30 字')
+  if (!(Number.isInteger(d.commentOncePerVideoHours) && d.commentOncePerVideoHours >= 1)) p.push('“每个视频只评论一次”的时长至少 1 小时')
   const ar = d.autoReply
   const badVideos = ar.videos.filter(v => !/^BV[0-9A-Za-z]{10}$/.test(v))
   if (badVideos.length > 0) p.push(`不是有效的 BV 号：${badVideos.join('、')}`)
@@ -199,6 +205,7 @@ export function BiliFishSection({ ctx }: { ctx: ClientCtx }) {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [checking, setChecking] = useState(false)
+  const [exploring, setExploring] = useState(false)
   const [notice, setNotice] = useState<{ tone: 'ok' | 'error' | 'warn'; text: string } | null>(null)
   const dirtyRef = useRef(false)
 
@@ -250,6 +257,19 @@ export function BiliFishSection({ ctx }: { ctx: ClientCtx }) {
     }
   }
 
+  const exploreNow = async () => {
+    setExploring(true)
+    try {
+      const next = await callRpc<PanelState>(ctx, 'explore', null)
+      setState(next)
+      setNotice({ tone: next.exploreStatus.lastError ? 'warn' : 'ok', text: next.exploreStatus.lastError ?? `已唤醒会话“${next.exploreStatus.sessionId}”，大肥鱼开始逛了。` })
+    } catch (error) {
+      setNotice({ tone: 'error', text: `失败：${error instanceof Error ? error.message : String(error)}` })
+    } finally {
+      setExploring(false)
+    }
+  }
+
   const save = async () => {
     if (!state || !draft || !canSave) return
     const patch = diffSettings(state.settings, draft)
@@ -257,6 +277,16 @@ export function BiliFishSection({ ctx }: { ctx: ClientCtx }) {
       const confirmed = window.confirm(
         '开启后，模型在调用时显式传 dryRun: false 就会真的在 B 站发评论。\n'
         + `当前上限：每天 ${draft.maxCommentsPerDay} 条评论、${draft.maxRepliesPerDay} 条回复，间隔 ≥ ${draft.minIntervalMs / 1000} 秒。\n\n确定开启真实发送吗？`,
+      )
+      if (!confirmed) return
+    }
+    const exploreSend = (draft.explore.enabled && draft.explore.send && draft.sendEnabled && draft.explore.commentsPerRound > 0)
+      && (patch.explore?.enabled === true || patch.explore?.send === true || patch.sendEnabled === true)
+    if (exploreSend) {
+      const confirmed = window.confirm(
+        `“自己逛”将无人值守地用你的账号在陌生人的视频下发评论：每 ${Math.round(draft.explore.intervalMin / 60 * 10) / 10} 小时一轮、`
+        + `每轮最多 ${draft.explore.commentsPerRound} 条，每天最多 ${draft.maxCommentsPerDay} 条。\n`
+        + '频繁的自动评论可能被 B 站判定为刷屏，导致限流或封号。\n\n确定开启吗？',
       )
       if (!confirmed) return
     }
@@ -375,6 +405,9 @@ export function BiliFishSection({ ctx }: { ctx: ClientCtx }) {
         <Field title="同一条评论不重复回复" hint="在这段时间内，对同一个 parentRpid 只回复一次。">
           <NumberInput label="去重窗口（分钟）" value={draft.replyDedupeWindowMs / 60000} min={1} max={10080} disabled={ro} suffix="分钟" onChange={v => update('replyDedupeWindowMs', Math.round(v * 60000))} />
         </Field>
+        <Field title="同一个视频只评论一次" hint="在这段时间内不会对同一个视频再发评论（草稿也会提示）。">
+          <NumberInput label="每视频评论间隔（天）" value={draft.commentOncePerVideoHours / 24} min={1} max={365} disabled={ro} suffix="天" onChange={v => update('commentOncePerVideoHours', Math.max(1, Math.round(v * 24)))} />
+        </Field>
         <div style={S.muted}>字数限制：评论 {fixed.commentLength.min}～{fixed.commentLength.max} 字，回复 {fixed.replyLength.min}～{fixed.replyLength.max} 字（在 cordis.patch.yml 中修改）。</div>
       </section>
 
@@ -431,6 +464,70 @@ export function BiliFishSection({ ctx }: { ctx: ClientCtx }) {
               <span style={S.muted}>可用 {'{text}'} 和 {'{url}'}。</span>
             </label>
           </>
+        )}
+      </section>
+
+      <section style={S.card} aria-labelledby="bf-explore">
+        <h2 id="bf-explore" style={S.cardTitle}>自己逛</h2>
+        <div style={S.muted}>
+          定时唤醒专用会话“{state.exploreStatus.sessionId}”：按兴趣找视频、“看”视频、遇到真想说的才评论。
+          “看”是读标题简介、字幕、弹幕和热门评论——模型看不到画面，没有字幕的视频只能理解个大概。
+          每一轮都会调用模型。该会话只能使用 bili_discover、bili_watch_video、bili_build_prompt、bili_comment。
+        </div>
+        <Field title="开启自己逛">
+          <Toggle label="开启自己逛" checked={draft.explore.enabled} disabled={ro} onChange={v => update('explore', { ...draft.explore, enabled: v })} />
+        </Field>
+        <label style={S.block}>
+          <span>感兴趣的关键词</span>
+          <span style={S.muted}>每行一个，每轮轮流挑一个去搜；留空就逛热门。</span>
+          <ListInput
+            label="感兴趣的关键词"
+            rows={3}
+            disabled={ro}
+            placeholder={'猫\n独立游戏\n做饭'}
+            value={draft.explore.interests}
+            parse={t => t.split('\n').map(x => x.trim()).filter(Boolean)}
+            onChange={interests => update('explore', { ...draft.explore, interests })}
+          />
+        </label>
+        <Field title="多久逛一次" hint="不低于 30 分钟。">
+          <NumberInput label="逛的间隔（分钟）" value={draft.explore.intervalMin} min={30} max={1440} disabled={ro} suffix="分钟" onChange={v => update('explore', { ...draft.explore, intervalMin: v })} />
+        </Field>
+        <Field title="活跃时段" hint={`只在这段时间里逛（${state.fixed.timeZone}）。`}>
+          <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+            <NumberInput label="开始（点）" value={draft.explore.activeFrom} min={0} max={23} disabled={ro} onChange={v => update('explore', { ...draft.explore, activeFrom: v })} />
+            <span style={S.muted}>点到</span>
+            <NumberInput label="结束（点）" value={draft.explore.activeTo} min={1} max={24} disabled={ro} suffix="点" onChange={v => update('explore', { ...draft.explore, activeTo: v })} />
+          </span>
+        </Field>
+        <Field title="每轮最多看">
+          <NumberInput label="每轮最多看" value={draft.explore.watchPerRound} min={1} max={5} disabled={ro} suffix="个" onChange={v => update('explore', { ...draft.explore, watchPerRound: v })} />
+        </Field>
+        <Field title="每轮最多评论" hint="填 0 就只看不评论。">
+          <NumberInput label="每轮最多评论" value={draft.explore.commentsPerRound} min={0} max={3} disabled={ro} suffix="条" onChange={v => update('explore', { ...draft.explore, commentsPerRound: v })} />
+        </Field>
+        <Field title="真实评论" hint="关闭时只出草稿，可以在该会话里查看。开启后仍需上面的“允许真实发送”，受每日上限、间隔和“每个视频只评论一次”限制。">
+          <Toggle label="自己逛真实评论" checked={draft.explore.send} disabled={ro} onChange={v => update('explore', { ...draft.explore, send: v })} />
+        </Field>
+        <div style={S.stats}>
+          <div style={S.stat}><div style={S.muted}>上次出门</div><div style={S.statValue}>{formatTime(state.exploreStatus.lastWakeAt)}</div></div>
+          <div style={S.stat}><div style={S.muted}>上次关键词</div><div style={S.statValue}>{state.exploreStatus.lastKeyword ?? '—'}</div></div>
+          <div style={S.stat}><div style={S.muted}>下次关键词</div><div style={S.statValue}>{state.exploreStatus.nextKeyword ?? '热门'}</div></div>
+          <div style={S.stat}><div style={S.muted}>现在</div><div style={S.statValue}>{state.exploreStatus.active ? '活跃时段' : '休息中'}</div></div>
+        </div>
+        {state.recentlyCommented.length > 0 && <div style={S.muted}>最近评论过：{state.recentlyCommented.join('、')}</div>}
+        {state.exploreStatus.lastError && <div style={S.banner('warn')}>{state.exploreStatus.lastError}</div>}
+        {!ro && (
+          <div>
+            <button
+              type="button"
+              style={S.button(false, !state.settings.explore.enabled || exploring)}
+              disabled={!state.settings.explore.enabled || exploring}
+              onClick={() => { void exploreNow() }}
+            >
+              {exploring ? '唤醒中…' : '现在去逛一次'}
+            </button>
+          </div>
         )}
       </section>
 

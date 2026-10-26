@@ -41,6 +41,33 @@ export interface Config {
     blockDirect: string[]
     /** 读取视频评论的工具公开名（自动回复巡检用）。 */
     commentsTool: string
+    /** 自己逛 / 看视频用到的只读工具公开名。 */
+    searchTool: string
+    hotTool: string
+    userVideosTool: string
+    videoInfoTool: string
+    subtitleTool: string
+    danmakuTool: string
+  }
+  /** 同一个视频在这段时间内只评论一次（小时）。 */
+  commentOncePerVideoHours: Live<number>
+  explore: {
+    /** 自己逛总开关，默认关闭。 */
+    enabled: Live<boolean>
+    /** 感兴趣的关键词，每轮轮流挑一个；为空则逛热门。 */
+    interests: Live<string[]>
+    /** 两轮之间的间隔（分钟），不低于 30。 */
+    intervalMin: Live<number>
+    /** 只在这段时间内逛（时区见 timeZone），[from, to) 小时。 */
+    activeFrom: Live<number>
+    activeTo: Live<number>
+    /** 每轮最多看几个视频。 */
+    watchPerRound: Live<number>
+    /** 每轮最多评论几个视频。 */
+    commentsPerRound: Live<number>
+    /** 为 true 时以 dryRun:false 真实评论（仍受 sendEnabled 与频率限制约束）；否则只出草稿。 */
+    send: Live<boolean>
+    sessionId: string
   }
   autoReply: {
     /** 自动回复总开关，默认关闭。 */
@@ -156,6 +183,29 @@ const ConfigSchema = Schema.object({
       .description('禁止模型直接调用的其他 B 站写操作工具。清空则允许模型直接点赞、投币、关注等。'),
     commentsTool: Schema.string().default('mcp__bilibili__bilibili_video_comments')
       .description('读取视频评论的工具公开名（自动回复巡检用）。'),
+    searchTool: Schema.string().default('mcp__bilibili__bilibili_search'),
+    hotTool: Schema.string().default('mcp__bilibili__bilibili_hot'),
+    userVideosTool: Schema.string().default('mcp__bilibili__bilibili_user_videos'),
+    videoInfoTool: Schema.string().default('mcp__bilibili__bilibili_video_info'),
+    subtitleTool: Schema.string().default('mcp__bilibili__bilibili_video_subtitle'),
+    danmakuTool: Schema.string().default('mcp__bilibili__bilibili_video_danmaku'),
+  }),
+  commentOncePerVideoHours: Schema.natural().min(1).max(24 * 365).default(24 * 7).volatile()
+    .description('同一个视频在这段时间内只评论一次（小时），默认 7 天。'),
+  explore: Schema.object({
+    enabled: Schema.boolean().default(false).volatile()
+      .description('自己逛：定时找感兴趣的视频、看完再决定要不要评论。默认关闭。'),
+    interests: Schema.array(Schema.string()).default([]).volatile()
+      .description('感兴趣的关键词，每轮轮流挑一个；为空则逛热门。'),
+    intervalMin: Schema.natural().min(30).max(24 * 60).default(180).volatile()
+      .description('两轮之间的间隔（分钟），不低于 30。每轮都会调用模型。'),
+    activeFrom: Schema.natural().max(23).default(9).volatile(),
+    activeTo: Schema.natural().min(1).max(24).default(23).volatile(),
+    watchPerRound: Schema.natural().min(1).max(5).default(3).volatile(),
+    commentsPerRound: Schema.natural().min(0).max(3).default(1).volatile(),
+    send: Schema.boolean().default(false).volatile()
+      .description('真实评论（仍需 sendEnabled 且受每日上限、间隔、每视频一次的限制）；关闭时只出草稿。'),
+    sessionId: Schema.string().default('bili-fish-explore'),
   }),
   autoReply: Schema.object({
     enabled: Schema.boolean().default(false).volatile()
@@ -227,9 +277,17 @@ export function configProblems(settings: Settings): string[] {
   for (const name of settings.bilibili.blockDirect) {
     if (!TOOL_NAME.test(name)) problems.push(`bilibili.blockDirect entry "${name}" is not a valid tool name`)
   }
-  if (!TOOL_NAME.test(settings.bilibili.commentsTool)) {
-    problems.push(`bilibili.commentsTool "${settings.bilibili.commentsTool}" is not a valid tool name`)
+  for (const key of ['commentsTool', 'searchTool', 'hotTool', 'userVideosTool', 'videoInfoTool', 'subtitleTool', 'danmakuTool'] as const) {
+    if (!TOOL_NAME.test(settings.bilibili[key])) problems.push(`bilibili.${key} "${settings.bilibili[key]}" is not a valid tool name`)
   }
+  const ex = settings.explore
+  if (ex.activeFrom >= ex.activeTo) problems.push(`explore.activeFrom (${ex.activeFrom}) must be before explore.activeTo (${ex.activeTo})`)
+  if (ex.commentsPerRound > ex.watchPerRound) problems.push('explore.commentsPerRound must not exceed explore.watchPerRound')
+  if (ex.interests.length > 30 || ex.interests.some(k => k.trim() === '' || k.length > 30)) {
+    problems.push('explore.interests: at most 30 keywords, each 1-30 characters')
+  }
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(ex.sessionId)) problems.push(`explore.sessionId "${ex.sessionId}" must match [A-Za-z0-9_-]{1,64}`)
+  if (ex.sessionId === settings.autoReply.sessionId) problems.push('explore.sessionId must differ from autoReply.sessionId')
   for (const v of settings.autoReply.videos) {
     if (!/^BV[0-9A-Za-z]{10}$/.test(v)) problems.push(`autoReply.videos entry "${v}" is not a BV id`)
   }

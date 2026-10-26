@@ -2,6 +2,11 @@ import type { Settings } from './config.js'
 
 export type Bucket = 'comment' | 'reply'
 
+/** BV ids are case-sensitive; av ids are not. */
+function videoKey(videoId: string): string {
+  return /^av\d+$/i.test(videoId) ? videoId.toLowerCase() : videoId
+}
+
 export type GuardDecision = { ok: true } | { ok: false; message: string }
 
 export interface UsageSnapshot {
@@ -28,6 +33,7 @@ export class SendGuard {
   private counts: Record<Bucket, number> = { comment: 0, reply: 0 }
   private lastSendAt = Number.NEGATIVE_INFINITY
   private readonly replied = new Map<string, number>()
+  private readonly commented = new Map<string, number>()
   private readonly dayFormat: Intl.DateTimeFormat
 
   constructor(private readonly settings: () => Settings, private readonly now: () => number = Date.now) {
@@ -76,6 +82,30 @@ export class SendGuard {
   markReplied(parentRpid: string): void {
     this.pruneReplied()
     this.replied.set(parentRpid, this.now())
+  }
+
+  /** Whether this plugin commented on the video within commentOncePerVideoHours. */
+  wasCommented(videoId: string): boolean {
+    this.pruneCommented()
+    return this.commented.has(videoKey(videoId))
+  }
+
+  markCommented(videoId: string): void {
+    this.pruneCommented()
+    this.commented.set(videoKey(videoId), this.now())
+  }
+
+  /** Videos commented on recently, newest first (for the exploration prompt). */
+  recentlyCommented(limit = 20): string[] {
+    this.pruneCommented()
+    return [...this.commented.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([v]) => v)
+  }
+
+  private pruneCommented(): void {
+    const cutoff = this.now() - this.settings().commentOncePerVideoHours * 3600_000
+    for (const [v, at] of this.commented) {
+      if (at <= cutoff) this.commented.delete(v)
+    }
   }
 
   usage(): UsageSnapshot {

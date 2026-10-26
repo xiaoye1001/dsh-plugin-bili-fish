@@ -38,6 +38,25 @@
 2. 否则若 `voiceFallback.enabled: true`（默认关闭）→ 把音频以 multipart 上传到 `voiceFallback.uploadUrl`，从响应 JSON 的 `urlField` 取链接，按 `template` 拼进文字评论发出。
 3. 都不满足 → `{ skipped: true, reason: "voice_unsupported" }`，不会白白合成音频。
 
+## 自己逛（找视频、看视频、评论）
+
+默认关闭，在设置页「自己逛」里开启。
+
+- **怎么逛**：每隔一段时间（默认 3 小时，最短 30 分钟），并且只在活跃时段内（默认 9～23 点），唤醒专用 DSH 会话 `bili-fish-explore`。把你填的兴趣关键词轮流交给大肥鱼（留空就逛热门），它自己：
+  1. 用 `bili_discover` 找候选视频；
+  2. 挑真正好奇的，用 `bili_watch_video` 看（每轮最多 3 个）；
+  3. 只在真有话想说时，用 `bili_comment` 评论（每轮最多 1 条，可设为 0 只看不评）。
+- **“看视频”是什么**：读取标题简介和数据、字幕（视频里说了什么）、弹幕和热门评论（观众反应）。模型看不到画面；没有字幕的视频只能根据简介、弹幕和评论理解个大概。
+- **新工具**：
+  - `bili_discover(keyword?)`：搜索或看热门。`bilibili-mcp-server` 的搜索和热门结果不带 BV 号，所以插件会去查对应 UP 主最近的视频，按标题匹配出 BV 号；付费、直播内容和匹配不上的会跳过。每次最多查 2×候选数 个 UP 主。
+  - `bili_watch_video(videoId)`：一次取齐信息、字幕、弹幕、热门评论，各自限长；某一部分失败只标注失败，不影响其它部分。
+- **安全与克制**：
+  - 视频里的文字都是网友写的。唤醒前会把会话工具限制成只有 `bili_discover`、`bili_watch_video`、`bili_build_prompt`、`bili_comment`；限制不上就不唤醒。
+  - 「真实评论」默认关闭，只出草稿；打开它且打开「允许真实发送」才会真的发，开启时会弹确认框。
+  - 照常受每日评论上限（默认 5 条）和发送间隔约束；另外**同一个视频 7 天内只评论一次**（对所有评论生效，可调）。
+  - 自动在陌生人视频下评论可能被 B 站判定为刷屏，导致限流或封号。建议先只出草稿看几天，再小量开启。
+- **成本**：和自动回复不同，每一轮都会调用模型，消耗额度。
+
 ## 自动回复（定时巡检）
 
 默认关闭，在设置页「自动回复」里开启。
@@ -65,7 +84,7 @@ DSH Web 的设置面板里会多出一页「大肥鱼 · B 站」：
 工作方式：
 
 - 浏览器半在 `src/client/`，打包成 `lib/client.js`，由 `package.json` 的 `dsh.client` 声明加载，注册到 `settings.section` 插槽。
-- 主进程半在 `src/panel/host.ts`，用 `ctx.connection.fetch.register` 在 DSH 自己的 `/api` 下注册两个接口：`POST /api/bili-fish/state`、`/save` 和 `/check`（立即巡检一次），复用 DSH 网页的登录态。业务失败一律返回 `{ ok: false, error: { code, message, details } }`。
+- 主进程半在 `src/panel/host.ts`，用 `ctx.connection.fetch.register` 在 DSH 自己的 `/api` 下注册两个接口：`POST /api/bili-fish/state`、`/save`、`/check`（立即巡检一次）和 `/explore`（现在去逛一次），复用 DSH 网页的登录态。业务失败一律返回 `{ ok: false, error: { code, message, details } }`。
 - 没有用 `connection.rpc.handle` 新开顶层通道：那需要插件能看到 `webServer` 服务，而 profile 里安装的插件看不到它（启动时报 `cannot get property "webServer" without inject`，页面得到 405）。
 - 保存经 `ctx.settings.update(<entry id>, patch, revision)` 写入当前 profile 的 `cordis.patch.yml`。可编辑的字段都是 `.volatile()`，保存后原地生效、**不重载插件**，所以当日计数和去重不会被清零。
 - 主进程对 patch 做白名单 + 类型 + 下限校验，客户端也会提前提示；revision 不一致时返回 `conflict`，页面会重新加载。
