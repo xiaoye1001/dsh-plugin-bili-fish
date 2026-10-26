@@ -1,0 +1,11 @@
+# 组合包层（dsh.bundle.patch）：dsh plugin add 后自动应用。
+# 插件行按包名引用。要改配置时，在自己 profile 的 cordis.patch.yml 里用
+#   - id: bili-fish
+#     config: { ... }
+# 覆盖——注意 patch 会整行替换 config，需重述所有要改的键。
+- insert:
+    - id: bili-fish
+      name: '@your-scope/dsh-plugin-bili-fish'
+      config:
+        sendEnabled: false
+        dryRunByDefault: true

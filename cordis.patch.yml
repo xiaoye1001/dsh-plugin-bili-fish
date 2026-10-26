@@ -1,0 +1,38 @@
+# 本地开发用 patch overlay：
+#   npm run build
+#   dsh web --patch /absolute/path/to/dsh-plugin-bili-fish/cordis.patch.yml
+# 插件路径必须是绝对路径。把下面的 /ABSOLUTE/PATH 换成本仓库所在目录。
+
+# 1) bilibili-mcp：经官方桥 @deepseek-ai/dsh-mcp-client 接入，
+#    工具会以 mcp__bilibili__<tool> 出现在 ctx.tools。
+#    command/args 按你实际使用的 bilibili-mcp server 填写；登录 cookie 由该 server 自己管理。
+- insert:
+    - id: mcp-bilibili
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: bilibili
+        transport: stdio
+        command: npx
+        args: ['-y', '<your-bilibili-mcp-package>']
+        env:
+          BILIBILI_COOKIE: !!js process.env.BILIBILI_COOKIE
+
+# 2) 本插件（指向源码构建产物 lib/index.js）。
+- insert:
+    - id: bili-fish
+      name: '/ABSOLUTE/PATH/dsh-plugin-bili-fish/lib/index.js'
+      config:
+        sendEnabled: false          # 总开关，先保持关闭，只看草稿
+        dryRunByDefault: true
+        maxCommentsPerDay: 5
+        maxRepliesPerDay: 10
+        minIntervalMs: 12000
+        voiceEnabled: true
+        bilibili:
+          replyTool: mcp__bilibili__bili_reply
+          voiceTool: ''             # bilibili-mcp 没有语音评论工具时留空
+        tts:
+          service: tts              # dsh-plugin-tts 提供的 ctx 服务名
+          defaultVoice: zh-CN-XiaoxiaoNeural
+        voiceFallback:
+          enabled: false            # 降级路径默认关闭
