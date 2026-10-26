@@ -37,6 +37,8 @@ export interface Config {
     replyTool: string
     /** 语音评论工具的公开名；留空表示 bilibili-mcp 没有这个能力。 */
     voiceTool: string
+    /** 不允许模型直接调用的 B 站写操作工具（回复工具与语音工具总是受保护）。 */
+    blockDirect: string[]
   }
   tts: {
     /** 提供 Edge TTS 的 ctx 服务名（由 dsh-plugin-tts 注册）。 */
@@ -93,6 +95,18 @@ const length = (min: number, max: number) => Schema.object({
   max: Schema.natural().min(1).default(max),
 })
 
+/** Write tools of bilibili-mcp-server besides bilibili_reply, under serverName "bilibili". */
+export const DEFAULT_BLOCKED_WRITES = [
+  'mcp__bilibili__bilibili_delete_comment',
+  'mcp__bilibili__bilibili_like_comment',
+  'mcp__bilibili__bilibili_send_danmaku',
+  'mcp__bilibili__bilibili_video_like',
+  'mcp__bilibili__bilibili_video_coin',
+  'mcp__bilibili__bilibili_video_favorite',
+  'mcp__bilibili__bilibili_user_follow',
+  'mcp__bilibili__bilibili_user_unfollow',
+] as const
+
 const ConfigSchema = Schema.object({
   sendEnabled: Schema.boolean().default(false).volatile()
     .description('总发送开关，默认关闭。关闭时所有真实发送都返回 send_disabled。'),
@@ -114,10 +128,12 @@ const ConfigSchema = Schema.object({
   voiceMaxLength: Schema.natural().min(1).default(200)
     .description('语音文本最大字数。'),
   bilibili: Schema.object({
-    replyTool: Schema.string().default('mcp__bilibili__bili_reply')
-      .description('bilibili-mcp 的评论/回复工具公开名（mcp__<serverName>__<tool>）。'),
+    replyTool: Schema.string().default('mcp__bilibili__bilibili_reply')
+      .description('bilibili-mcp-server 的评论/回复工具公开名（mcp__<serverName>__bilibili_reply）。'),
     voiceTool: Schema.string().default('')
       .description('语音评论工具公开名；bilibili-mcp 不提供时留空。'),
+    blockDirect: Schema.array(Schema.string()).default([...DEFAULT_BLOCKED_WRITES])
+      .description('禁止模型直接调用的其他 B 站写操作工具。清空则允许模型直接点赞、投币、关注等。'),
   }),
   tts: Schema.object({
     service: Schema.string().default('tts')
@@ -167,6 +183,9 @@ export function configProblems(settings: Settings): string[] {
   }
   if (settings.bilibili.voiceTool !== '' && !TOOL_NAME.test(settings.bilibili.voiceTool)) {
     problems.push(`bilibili.voiceTool "${settings.bilibili.voiceTool}" is not a valid tool name`)
+  }
+  for (const name of settings.bilibili.blockDirect) {
+    if (!TOOL_NAME.test(name)) problems.push(`bilibili.blockDirect entry "${name}" is not a valid tool name`)
   }
   if (settings.tts.service.trim() === '') problems.push('tts.service must not be empty')
   if (settings.voiceFallback.enabled) {

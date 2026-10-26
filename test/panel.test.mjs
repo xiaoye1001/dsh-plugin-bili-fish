@@ -33,7 +33,7 @@ async function boot({ raw = {}, settings = true, entryId = ENTRY, revision = 3 }
   await root.plugin(ToolRegistry)
   const mcpCalls = []
   root.tools.register({
-    name: 'mcp__bilibili__bili_reply',
+    name: 'mcp__bilibili__bilibili_reply',
     description: 'fake',
     parameters: { type: 'object', properties: {} },
     output: {

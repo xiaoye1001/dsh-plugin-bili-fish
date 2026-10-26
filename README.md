@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | `bili_build_prompt` | 返回大肥鱼人格与当前长度约束；模型写正文前先调它 | `{ kind, persona, task, minLength, maxLength, context? }` |
 | `bili_comment` | 视频下发评论（15～60 字） | `{ rpid, message }` 或 `{ skipped: true, reason, message? }` |
-| `bili_reply` | 回复评论（5～30 字），同一 `parentRpid` 10 分钟内只回一次 | 同上；重复时 `{ rpid: "", message: "skipped: already replied" }` |
+| `bili_reply` | 回复评论（5～30 字），同一 `parentRpid` 10 分钟内只回一次；楼中楼回复另传 `rootRpid` | 同上；重复时 `{ rpid: "", message: "skipped: already replied" }` |
 | `bili_send_voice` | Edge TTS 生成语音并作为语音评论发送 | `{ audioPath, rpid?, message }` 或 `{ skipped: true, reason, message?, audioPath? }` |
 
 `reason` 取值：`rate_limited`、`send_disabled`、`dry_run_not_explicit`、`dependency_missing`、`voice_disabled`、`voice_unsupported`。这些都是正常返回值，不会抛异常。参数错误（字数超限、BV 号不合法）和底层失败（bilibili-mcp 报错、TTS 服务缺失）会抛异常，工具结果标为 `isError`。
@@ -27,7 +27,8 @@
 
 ## 依赖
 
-- **bilibili-mcp**：本插件不自己发 HTTP 请求，所有 B 站写操作都经 `ctx.tools.execute()` 调用 `@deepseek-ai/dsh-mcp-client` 桥接出来的 `mcp__bilibili__bili_reply`（参数 `videoId`、`message`、可选 `parentRpid`）。工具名可通过 `bilibili.replyTool` 改。
+- **B 站 MCP 服务**：使用 [`bilibili-mcp-server`](https://www.npmjs.com/package/bilibili-mcp-server)（[GitHub](https://github.com/Iseenope/bilibili-mcp-server)，MIT，已验证 1.2.0）。它是 npm 上唯一能发评论的 B 站 MCP 服务。经 `@deepseek-ai/dsh-mcp-client` 以 `serverName: bilibili` 接入后，本插件调用 `mcp__bilibili__bilibili_reply`（参数 `videoId`、`message`，回复时加 `parentRpid` 和 `rootRpid`）。本插件不自己发 HTTP 请求，登录和 Cookie 由该服务管理，需要环境变量 `BILIBILI_SESSDATA`、`BILIBILI_BILI_JCT`、`BILIBILI_DEDE_USER_ID`（见 `cordis.patch.yml`）。它没有语音评论工具，所以 `bilibili.voiceTool` 默认留空。
+- **防止绕过**：插件注册了一个工具守卫，模型不能直接调用 `bilibili_reply`（以及默认列表里的删评论、点赞、投币、收藏、关注、发弹幕等写操作），只能经本插件的工具调用，从而始终受发送开关和频率限制约束。要放开其他写操作，清空 `bilibili.blockDirect`；回复工具始终受保护。
 - **TTS**：通过 `ctx.get(tts.service)` 获取一个提供 `synthesize({ text, voice, provider, signal }) => { audio, mime? }` 的服务（契约见 `src/tts.ts`）。找不到时 `bili_send_voice` 抛出“依赖缺失”错误，不会引入第三方 TTS 库。
 - `apply()` 时探测上述依赖，缺失只打 warn；草稿功能不受影响。
 
@@ -66,7 +67,7 @@ npm test             # 构建 + 36 个测试（真实 Cordis + dsh-tools 注册�
 npm run typecheck
 ```
 
-本地联调：把 `cordis.patch.yml` 里的 `/ABSOLUTE/PATH` 和 bilibili-mcp 包名改成你的，然后：
+本地联调：把 `cordis.patch.yml` 里的 `/ABSOLUTE/PATH` 改成你的路径，导出上面三个 `BILIBILI_*` 环境变量，然后：
 
 ```bash
 npm run build

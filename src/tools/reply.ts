@@ -21,6 +21,7 @@ export function createReplyTool({ settings, guard, bili }: ToolDeps): ToolDefini
     parameters: {
       videoId: { type: 'string', required: true, description: '评论所在视频的 BV 号或 av 号' },
       parentRpid: { type: 'string', required: true, description: '要回复的那条评论的 rpid（纯数字）' },
+      rootRpid: { type: 'string', description: '楼中楼回复时，所在主楼（顶层评论）的 rpid；直接回复顶层评论时不传' },
       text: { type: 'string', required: true, description: `回复正文，${min}～${max} 字，大肥鱼口吻，无 Markdown` },
       dryRun: { type: 'boolean', description: '默认 true：只返回草稿不发送。false 才真正发送。' },
     },
@@ -37,6 +38,7 @@ export function createReplyTool({ settings, guard, bili }: ToolDeps): ToolDefini
       const config = settings()
       assertVideoId(args.videoId)
       assertRpid(args.parentRpid)
+      if (args.rootRpid !== undefined) assertRpid(args.rootRpid)
       const text = args.text.trim()
       assertLength('回复', text, config.replyLength)
 
@@ -56,7 +58,7 @@ export function createReplyTool({ settings, guard, bili }: ToolDeps): ToolDefini
       // Mark before the await so a concurrent call for the same comment is deduped too.
       guard.markReplied(args.parentRpid)
       const posted = await bili.postText(
-        { videoId: args.videoId, message: text, parentRpid: args.parentRpid },
+        { videoId: args.videoId, message: text, parentRpid: args.parentRpid, rootRpid: args.rootRpid },
         exec,
       )
       return { rpid: posted.rpid, message: posted.rpid ? '已回复' : '已回复（未能从返回中解析 rpid）' }

@@ -3,7 +3,7 @@ import { basename } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-tools'
-import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
+import type { ToolExecution, ToolExecutionToken, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { Config, Settings } from './config.js'
 
 export interface PostResult {
@@ -21,6 +21,8 @@ export interface PostResult {
  */
 export class BiliClient {
   private seq = 0
+  /** Tokens of this plugin's own executions that are currently calling a bilibili tool. */
+  private readonly inFlight = new Set<ToolExecutionToken>()
 
   constructor(private readonly ctx: Context, private readonly config: Config['bilibili']) {}
 
@@ -38,14 +40,33 @@ export class BiliClient {
     return this.ctx.tools.get(name, exec?.agent) !== undefined
   }
 
-  /** Post a top-level comment (no parentRpid) or a reply. */
+  /**
+   * Post a top-level comment (no parentRpid) or a reply. Bilibili threads a
+   * reply by `root` (the top-level comment) and `parent` (the comment being
+   * answered); for a reply to a top-level comment both are the same rpid.
+   */
   async postText(
-    input: { videoId: string; message: string; parentRpid?: string },
+    input: { videoId: string; message: string; parentRpid?: string; rootRpid?: string },
     exec: ToolRunContext,
   ): Promise<PostResult> {
     const args: Record<string, string> = { videoId: input.videoId, message: input.message }
-    if (input.parentRpid !== undefined) args.parentRpid = input.parentRpid
+    if (input.parentRpid !== undefined) {
+      args.parentRpid = input.parentRpid
+      args.rootRpid = input.rootRpid ?? input.parentRpid
+    }
     return this.call(this.config.replyTool, args, exec)
+  }
+
+  /**
+   * Monotonic tool guard: a bilibili write tool may only run as a nested call
+   * made by this plugin, so the model cannot bypass the switches, daily caps
+   * and spacing by calling the MCP tool directly. Returns a denial reason, or
+   * undefined to allow.
+   */
+  guardDirectCall(execution: Readonly<ToolExecution>, blocked: ReadonlySet<string>): string | undefined {
+    if (!blocked.has(execution.name)) return undefined
+    if (execution.parent !== undefined && this.inFlight.has(execution.parent)) return undefined
+    return `${execution.name} 只能经 bili_comment / bili_reply / bili_send_voice 调用（受发送开关与频率限制约束）`
   }
 
   async postVoice(
@@ -58,6 +79,15 @@ export class BiliClient {
   }
 
   private async call(name: string, args: Record<string, string>, exec: ToolRunContext): Promise<PostResult> {
+    this.inFlight.add(exec.token)
+    try {
+      return await this.dispatch(name, args, exec)
+    } finally {
+      this.inFlight.delete(exec.token)
+    }
+  }
+
+  private async dispatch(name: string, args: Record<string, string>, exec: ToolRunContext): Promise<PostResult> {
     const result = await this.ctx.tools.execute({
       callId: ToolCallId(`${exec.callId}:bili-fish:${++this.seq}`),
       rootCallId: exec.rootCallId,

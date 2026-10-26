@@ -45,6 +45,14 @@ export function apply(ctx: Context, config: Config) {
   ctx.tools.register(createReplyTool(deps))
   ctx.tools.register(createSendVoiceTool(deps))
 
+  // Keep the model from calling bilibili write tools directly and skipping the guard above.
+  ctx.tools.guard((execution) => {
+    const s = settings()
+    const blocked = new Set([s.bilibili.replyTool, ...s.bilibili.blockDirect])
+    if (s.bilibili.voiceTool) blocked.add(s.bilibili.voiceTool)
+    return deps.bili.guardDirectCall(execution, blocked)
+  })
+
   installPanelHost({
     ...deps,
     entryId: (ctx.fiber as { entry?: { options?: { id?: string } } }).entry?.options?.id,

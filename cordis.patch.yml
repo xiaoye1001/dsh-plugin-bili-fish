@@ -3,9 +3,10 @@
 #   dsh web --patch /absolute/path/to/dsh-plugin-bili-fish/cordis.patch.yml
 # 插件路径必须是绝对路径。把下面的 /ABSOLUTE/PATH 换成本仓库所在目录。
 
-# 1) bilibili-mcp：经官方桥 @deepseek-ai/dsh-mcp-client 接入，
-#    工具会以 mcp__bilibili__<tool> 出现在 ctx.tools。
-#    command/args 按你实际使用的 bilibili-mcp server 填写；登录 cookie 由该 server 自己管理。
+# 1) bilibili-mcp-server（npm: bilibili-mcp-server，github.com/Iseenope/bilibili-mcp-server）
+#    经官方桥 @deepseek-ai/dsh-mcp-client 接入，工具以 mcp__bilibili__bilibili_* 出现在 ctx.tools。
+#    登录信息从环境变量传入（浏览器 F12 → Application → Cookies → bilibili.com）：
+#      SESSDATA、bili_jct、DedeUserID。不要把它们写进这个文件。
 - insert:
     - id: mcp-bilibili
       name: '@deepseek-ai/dsh-mcp-client'
@@ -13,9 +14,11 @@
         serverName: bilibili
         transport: stdio
         command: npx
-        args: ['-y', '<your-bilibili-mcp-package>']
+        args: ['-y', 'bilibili-mcp-server@1.2.0']
         env:
-          BILIBILI_COOKIE: !!js process.env.BILIBILI_COOKIE
+          BILIBILI_SESSDATA: !!js process.env.BILIBILI_SESSDATA
+          BILIBILI_BILI_JCT: !!js process.env.BILIBILI_BILI_JCT
+          BILIBILI_DEDE_USER_ID: !!js process.env.BILIBILI_DEDE_USER_ID
 
 # 2) 本插件（指向源码构建产物 lib/index.js）。
 - insert:
@@ -29,8 +32,8 @@
         minIntervalMs: 12000
         voiceEnabled: true
         bilibili:
-          replyTool: mcp__bilibili__bili_reply
-          voiceTool: ''             # bilibili-mcp 没有语音评论工具时留空
+          replyTool: mcp__bilibili__bilibili_reply
+          voiceTool: ''             # bilibili-mcp-server 没有语音评论工具，留空
         tts:
           service: tts              # dsh-plugin-tts 提供的 ctx 服务名
           defaultVoice: zh-CN-XiaoxiaoNeural

@@ -51,5 +51,6 @@ test('extractRpid handles common bilibili-mcp result shapes', () => {
   assert.equal(extractRpid({ content: [], structuredContent: { rpid: 123456 } }), '123456')
   assert.equal(extractRpid({ content: [{ type: 'text', text: '{"data":{"rpid_str":"777888999"}}' }] }), '777888999')
   assert.equal(extractRpid({ content: [{ type: 'text', text: '评论成功 rpid: 246813579' }] }), '246813579')
+  assert.equal(extractRpid({ content: [{ type: 'text', text: '评论已发布\nrpid: 271828182845\n内容: 啊不对' }] }), '271828182845')
   assert.equal(extractRpid({ content: [{ type: 'text', text: 'ok' }] }), '')
 })

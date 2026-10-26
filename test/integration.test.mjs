@@ -31,14 +31,14 @@ async function boot({ config = {}, mcp = true, tts = true, voiceTool = false, mc
   await root.plugin(ToolRegistry)
   if (mcp) {
     root.tools.register({
-      name: 'mcp__bilibili__bili_reply',
+      name: 'mcp__bilibili__bilibili_reply',
       description: 'fake bilibili-mcp reply',
       parameters: { type: 'object', properties: {} },
       output: MCP_OUTPUT,
       async execute(args, exec) {
         calls.push({ args, signal: exec.signal })
         if (mcpBehavior) return mcpBehavior(args, exec)
-        return { content: [{ type: 'text', text: JSON.stringify({ code: 0, data: { rpid: 987654321 } }) }] }
+        return { content: [{ type: 'text', text: `评论已发布\nrpid: 987654321\n内容: ${String(args.message).substring(0, 100)}` }] }
       },
     })
   }
@@ -149,7 +149,7 @@ test('bili_reply passes parentRpid and dedupes the same comment', async () => {
   const { run, calls } = await boot({ config: { sendEnabled: true } })
   const r = await run('bili_reply', { videoId: VIDEO, parentRpid: '111222333', text: REPLY, dryRun: false })
   assert.deepEqual(r.value, { rpid: '987654321', message: '已回复' })
-  assert.deepEqual(calls[0].args, { videoId: VIDEO, message: REPLY, parentRpid: '111222333' })
+  assert.deepEqual(calls[0].args, { videoId: VIDEO, message: REPLY, parentRpid: '111222333', rootRpid: '111222333' })
 
   const dup = await run('bili_reply', { videoId: VIDEO, parentRpid: '111222333', text: REPLY, dryRun: false })
   assert.equal(dup.isError, false)
@@ -169,7 +169,7 @@ test('missing bilibili-mcp yields dependency_missing, not a crash', async () => 
   const r = await run('bili_comment', { videoId: VIDEO, text: COMMENT, dryRun: false })
   assert.equal(r.isError, false)
   assert.equal(r.value.reason, 'dependency_missing')
-  assert.match(r.value.message, /mcp__bilibili__bili_reply/)
+  assert.match(r.value.message, /mcp__bilibili__bilibili_reply/)
   const draft = await run('bili_comment', { videoId: VIDEO, text: COMMENT })
   assert.equal(draft.value.rpid, 'dry-run')
 })
@@ -289,4 +289,47 @@ test('bundle patch references the package by name', () => {
   const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url)))
   const patch = readFileSync(new URL('../bundle.patch.yml', import.meta.url), 'utf8')
   assert.ok(patch.includes(`name: '${pkg.name}'`))
+})
+
+test('bili_reply passes an explicit rootRpid for nested replies', async () => {
+  const { run, calls } = await boot({ config: { sendEnabled: true } })
+  const r = await run('bili_reply', { videoId: VIDEO, parentRpid: '222', rootRpid: '111', text: REPLY, dryRun: false })
+  assert.equal(r.isError, false, JSON.stringify(r))
+  assert.deepEqual(calls[0].args, { videoId: VIDEO, message: REPLY, parentRpid: '222', rootRpid: '111' })
+})
+
+test('the model cannot call bilibili write tools directly', async () => {
+  const { root, run, calls } = await boot({ config: { sendEnabled: true } })
+  root.tools.register({
+    name: 'mcp__bilibili__bilibili_video_coin',
+    description: 'fake coin',
+    parameters: { type: 'object', properties: {} },
+    output: MCP_OUTPUT,
+    async execute() { throw new Error('should not run') },
+  })
+  const direct = await run('mcp__bilibili__bilibili_reply', { videoId: VIDEO, message: COMMENT })
+  assert.equal(direct.isError, true)
+  assert.match(direct.error.message, /只能经 bili_comment/)
+  const coin = await run('mcp__bilibili__bilibili_video_coin', { videoId: VIDEO })
+  assert.equal(coin.isError, true)
+  assert.equal(calls.length, 0)
+  // ...while the plugin's own nested call still goes through.
+  const viaTool = await run('bili_comment', { videoId: VIDEO, text: COMMENT, dryRun: false })
+  assert.equal(viaTool.value.rpid, '987654321')
+  assert.equal(calls.length, 1)
+})
+
+test('blockDirect can be emptied to allow other write tools', async () => {
+  const { root, run } = await boot({ config: { bilibili: { blockDirect: [] } } })
+  root.tools.register({
+    name: 'mcp__bilibili__bilibili_video_like',
+    description: 'fake like',
+    parameters: { type: 'object', properties: {} },
+    output: MCP_OUTPUT,
+    async execute() { return { content: [{ type: 'text', text: 'liked' }] } },
+  })
+  const like = await run('mcp__bilibili__bilibili_video_like', { videoId: VIDEO })
+  assert.equal(like.isError, false)
+  const direct = await run('mcp__bilibili__bilibili_reply', { videoId: VIDEO, message: COMMENT })
+  assert.equal(direct.isError, true, 'the reply tool stays protected')
 })
