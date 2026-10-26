@@ -1,7 +1,8 @@
 import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import { ToolCallId } from '@deepseek-ai/dsh-llm'
+// Type-only: ToolCallId is a compile-time brand over string, so no runtime import of dsh-llm is needed.
+import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-tools'
 import type { ToolExecution, ToolExecutionToken, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { Config, Settings } from './config.js'
@@ -89,7 +90,7 @@ export class BiliClient {
 
   private async dispatch(name: string, args: Record<string, string>, exec: ToolRunContext): Promise<PostResult> {
     const result = await this.ctx.tools.execute({
-      callId: ToolCallId(`${exec.callId}:bili-fish:${++this.seq}`),
+      callId: `${exec.callId}:bili-fish:${++this.seq}` as ToolCallId,
       rootCallId: exec.rootCallId,
       name,
       arguments: args,

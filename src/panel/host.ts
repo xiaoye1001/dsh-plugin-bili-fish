@@ -245,8 +245,14 @@ export function installPanelHost(deps: PanelDeps): void {
   // index fallback (HTTP 405). Re-runs if the web server is replaced.
   ctx.inject(['connection', 'webServer'], (sub) => {
     sub.effect(() => {
-      const dispose = sub.connection.rpc.handle(RPC_CHANNEL, (endpoint, payload) => dispatch(deps, endpoint, payload))
-      ctx.logger('bili-fish').info(`settings page channel ${RPC_CHANNEL} registered`)
+      let dispose: () => unknown
+      try {
+        dispose = sub.connection.rpc.handle(RPC_CHANNEL, (endpoint, payload) => dispatch(deps, endpoint, payload))
+      } catch (error) {
+        console.error(`[bili-fish] 设置页通道 ${RPC_CHANNEL} 注册失败：`, error)
+        throw error
+      }
+      console.info(`[bili-fish] 设置页通道已注册：POST ${RPC_CHANNEL}/state`)
       return () => { void dispose() }
     }, 'bili-fish: rpc channel')
   })

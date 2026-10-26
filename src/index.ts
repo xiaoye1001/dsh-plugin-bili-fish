@@ -32,6 +32,8 @@ export function apply(ctx: Context, config: Config) {
   const initial = settings()
   assertConfig(initial)
   const logger = ctx.logger('bili-fish')
+  // Plain console too: `dsh web` shows plugin console output, the Cordis logger may go elsewhere.
+  console.info(`[bili-fish] 已加载 · 发送${initial.sendEnabled ? '已开启' : '关闭（只出草稿）'} · 条目 ${(ctx.fiber as { entry?: { options?: { id?: string } } }).entry?.options?.id ?? '(无)'}`)
 
   const deps: ToolDeps = {
     ctx,
