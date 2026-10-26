@@ -39,6 +39,26 @@ export interface Config {
     voiceTool: string
     /** 不允许模型直接调用的 B 站写操作工具（回复工具与语音工具总是受保护）。 */
     blockDirect: string[]
+    /** 读取视频评论的工具公开名（自动回复巡检用）。 */
+    commentsTool: string
+  }
+  autoReply: {
+    /** 自动回复总开关，默认关闭。 */
+    enabled: Live<boolean>
+    /** 要巡检的视频 BV 号。 */
+    videos: Live<string[]>
+    /** 两次巡检的间隔（秒），不低于 60。 */
+    intervalSec: Live<number>
+    /** 每轮最多交给模型处理的新评论数。 */
+    maxPerRound: Live<number>
+    /** 为 true 时让模型以 dryRun:false 真实回复（仍受 sendEnabled 与频率限制约束）；否则只出草稿。 */
+    send: Live<boolean>
+    /** 跳过这些昵称的评论（比如你自己）。 */
+    skipNames: Live<string[]>
+    /** 每个视频每次读取的评论数。 */
+    commentsPerVideo: number
+    /** 自动回复使用的 DSH 会话 id。 */
+    sessionId: string
   }
   tts: {
     /** 提供 Edge TTS 的 ctx 服务名（由 dsh-plugin-tts 注册）。 */
@@ -134,6 +154,26 @@ const ConfigSchema = Schema.object({
       .description('语音评论工具公开名；bilibili-mcp 不提供时留空。'),
     blockDirect: Schema.array(Schema.string()).default([...DEFAULT_BLOCKED_WRITES])
       .description('禁止模型直接调用的其他 B 站写操作工具。清空则允许模型直接点赞、投币、关注等。'),
+    commentsTool: Schema.string().default('mcp__bilibili__bilibili_video_comments')
+      .description('读取视频评论的工具公开名（自动回复巡检用）。'),
+  }),
+  autoReply: Schema.object({
+    enabled: Schema.boolean().default(false).volatile()
+      .description('自动回复总开关，默认关闭。'),
+    videos: Schema.array(Schema.string()).default([]).volatile()
+      .description('要巡检的视频 BV 号。'),
+    intervalSec: Schema.natural().min(60).max(86400).default(300).volatile()
+      .description('巡检间隔（秒），不低于 60。'),
+    maxPerRound: Schema.natural().min(1).max(10).default(3).volatile()
+      .description('每轮最多交给模型处理的新评论数，其余留到下一轮。'),
+    send: Schema.boolean().default(false).volatile()
+      .description('真实回复（仍需 sendEnabled 且受频率限制）；关闭时只生成草稿。'),
+    skipNames: Schema.array(Schema.string()).default([]).volatile()
+      .description('跳过这些昵称的评论。'),
+    commentsPerVideo: Schema.natural().min(1).max(30).default(30)
+      .description('每个视频每次读取的评论数（B 站默认按热度排序，新评论不一定在前列）。'),
+    sessionId: Schema.string().default('bili-fish-autoreply')
+      .description('自动回复使用的 DSH 会话 id。'),
   }),
   tts: Schema.object({
     service: Schema.string().default('tts')
@@ -186,6 +226,16 @@ export function configProblems(settings: Settings): string[] {
   }
   for (const name of settings.bilibili.blockDirect) {
     if (!TOOL_NAME.test(name)) problems.push(`bilibili.blockDirect entry "${name}" is not a valid tool name`)
+  }
+  if (!TOOL_NAME.test(settings.bilibili.commentsTool)) {
+    problems.push(`bilibili.commentsTool "${settings.bilibili.commentsTool}" is not a valid tool name`)
+  }
+  for (const v of settings.autoReply.videos) {
+    if (!/^BV[0-9A-Za-z]{10}$/.test(v)) problems.push(`autoReply.videos entry "${v}" is not a BV id`)
+  }
+  if (settings.autoReply.videos.length > 50) problems.push('autoReply.videos supports at most 50 videos')
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(settings.autoReply.sessionId)) {
+    problems.push(`autoReply.sessionId "${settings.autoReply.sessionId}" must match [A-Za-z0-9_-]{1,64}`)
   }
   if (settings.tts.service.trim() === '') problems.push('tts.service must not be empty')
   if (settings.voiceFallback.enabled) {

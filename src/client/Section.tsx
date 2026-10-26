@@ -118,6 +118,30 @@ function NumberInput({ value, min, max, step = 1, onChange, disabled, suffix, la
   )
 }
 
+/** Multi-line list input that keeps the raw text while typing (so Enter works) and reports the parsed list. */
+function ListInput({ value, onChange, parse, disabled, rows, placeholder, label }: {
+  value: string[]; onChange: (v: string[]) => void; parse: (text: string) => string[]
+  disabled?: boolean; rows: number; placeholder?: string; label: string
+}) {
+  const [text, setText] = useState(value.join('\n'))
+  // Follow outside changes (load, undo, conflict reload) without fighting the user's typing.
+  useEffect(() => {
+    if (JSON.stringify(parse(text)) !== JSON.stringify(value)) setText(value.join('\n'))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value])
+  return (
+    <textarea
+      aria-label={label}
+      style={S.textarea}
+      rows={rows}
+      disabled={disabled}
+      placeholder={placeholder}
+      value={text}
+      onChange={e => { setText(e.target.value); onChange(parse(e.target.value)) }}
+    />
+  )
+}
+
 /** Fields that differ between the server copy and the draft, as a nested patch. */
 export function diffSettings(base: EditableSettings, draft: EditableSettings): Partial<EditableSettings> {
   const out: Record<string, unknown> = {}
@@ -127,7 +151,7 @@ export function diffSettings(base: EditableSettings, draft: EditableSettings): P
     if (typeof b === 'object' && b !== null) {
       const sub: Record<string, unknown> = {}
       for (const [k, v] of Object.entries(b)) {
-        if ((a as Record<string, unknown>)[k] !== v) sub[k] = v
+        if (JSON.stringify((a as Record<string, unknown>)[k]) !== JSON.stringify(v)) sub[k] = v
       }
       if (Object.keys(sub).length > 0) out[key] = sub
     } else if (a !== b) {
@@ -150,7 +174,18 @@ export function localProblems(d: EditableSettings): string[] {
     if (!/^https?:\/\/\S+$/.test(d.voiceFallback.uploadUrl)) p.push('开启降级时需要填写 http(s) 上传地址')
     if (!d.voiceFallback.template.includes('{url}')) p.push('降级模板必须包含 {url}')
   }
+  const ar = d.autoReply
+  const badVideos = ar.videos.filter(v => !/^BV[0-9A-Za-z]{10}$/.test(v))
+  if (badVideos.length > 0) p.push(`不是有效的 BV 号：${badVideos.join('、')}`)
+  if (ar.videos.length > 50) p.push('最多巡检 50 个视频')
+  if (!(Number.isInteger(ar.intervalSec) && ar.intervalSec >= 60)) p.push('巡检间隔不能低于 1 分钟')
+  if (!(Number.isInteger(ar.maxPerRound) && ar.maxPerRound >= 1 && ar.maxPerRound <= 10)) p.push('每轮处理条数需在 1～10 之间')
+  if (ar.enabled && ar.videos.length === 0) p.push('开启自动回复前请先填写要巡检的视频')
   return p
+}
+
+function lines(text: string): string[] {
+  return text.split(/[\s,，]+/).map(x => x.trim()).filter(Boolean)
 }
 
 function formatTime(ms: number | null): string {
@@ -163,6 +198,7 @@ export function BiliFishSection({ ctx }: { ctx: ClientCtx }) {
   const [draft, setDraft] = useState<EditableSettings | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [checking, setChecking] = useState(false)
   const [notice, setNotice] = useState<{ tone: 'ok' | 'error' | 'warn'; text: string } | null>(null)
   const dirtyRef = useRef(false)
 
@@ -201,6 +237,19 @@ export function BiliFishSection({ ctx }: { ctx: ClientCtx }) {
     setDraft(d => (d ? { ...d, [key]: value } : d))
   }
 
+  const checkNow = async () => {
+    setChecking(true)
+    try {
+      const next = await callRpc<PanelState>(ctx, 'check', null)
+      setState(next)
+      setNotice({ tone: next.autoReplyStatus.lastError ? 'warn' : 'ok', text: next.autoReplyStatus.lastError ?? '检查完成。' })
+    } catch (error) {
+      setNotice({ tone: 'error', text: `检查失败：${error instanceof Error ? error.message : String(error)}` })
+    } finally {
+      setChecking(false)
+    }
+  }
+
   const save = async () => {
     if (!state || !draft || !canSave) return
     const patch = diffSettings(state.settings, draft)
@@ -208,6 +257,15 @@ export function BiliFishSection({ ctx }: { ctx: ClientCtx }) {
       const confirmed = window.confirm(
         '开启后，模型在调用时显式传 dryRun: false 就会真的在 B 站发评论。\n'
         + `当前上限：每天 ${draft.maxCommentsPerDay} 条评论、${draft.maxRepliesPerDay} 条回复，间隔 ≥ ${draft.minIntervalMs / 1000} 秒。\n\n确定开启真实发送吗？`,
+      )
+      if (!confirmed) return
+    }
+    const autoSend = (draft.autoReply.enabled && draft.autoReply.send && draft.sendEnabled)
+      && (patch.autoReply?.enabled === true || patch.autoReply?.send === true || patch.sendEnabled === true)
+    if (autoSend) {
+      const confirmed = window.confirm(
+        `自动回复将无人值守地用你的账号回复 ${draft.autoReply.videos.length} 个视频下的新评论，`
+        + `每 ${Math.round(draft.autoReply.intervalSec / 60)} 分钟检查一次，每天最多 ${draft.maxRepliesPerDay} 条。\n\n确定开启吗？`,
       )
       if (!confirmed) return
     }
@@ -373,6 +431,69 @@ export function BiliFishSection({ ctx }: { ctx: ClientCtx }) {
               <span style={S.muted}>可用 {'{text}'} 和 {'{url}'}。</span>
             </label>
           </>
+        )}
+      </section>
+
+      <section style={S.card} aria-labelledby="bf-auto">
+        <h2 id="bf-auto" style={S.cardTitle}>自动回复</h2>
+        <div style={S.muted}>
+          定时读取下面这些视频的评论（不消耗模型额度）。第一次只记下已有评论，之后出现的新评论才会交给专用会话
+          “{state.autoReplyStatus.sessionId}”，由大肥鱼决定回不回。该会话只能使用 bili_build_prompt 和 bili_reply。
+        </div>
+        <Field title="开启自动回复">
+          <Toggle label="开启自动回复" checked={draft.autoReply.enabled} disabled={ro} onChange={v => update('autoReply', { ...draft.autoReply, enabled: v })} />
+        </Field>
+        <label style={S.block}>
+          <span>要巡检的视频</span>
+          <span style={S.muted}>每行一个 BV 号，最多 50 个。</span>
+          <ListInput
+            label="要巡检的视频"
+            rows={3}
+            disabled={ro}
+            placeholder={'BV1xx411c7mD\nBV1yy411c7mE'}
+            value={draft.autoReply.videos}
+            parse={lines}
+            onChange={videos => update('autoReply', { ...draft.autoReply, videos })}
+          />
+        </label>
+        <Field title="巡检间隔" hint="不低于 1 分钟。">
+          <NumberInput label="巡检间隔（分钟）" value={draft.autoReply.intervalSec / 60} min={1} max={1440} disabled={ro} suffix="分钟" onChange={v => update('autoReply', { ...draft.autoReply, intervalSec: Math.round(v * 60) })} />
+        </Field>
+        <Field title="每轮最多处理" hint="多出来的留到下一轮。">
+          <NumberInput label="每轮最多处理" value={draft.autoReply.maxPerRound} min={1} max={10} disabled={ro} suffix="条" onChange={v => update('autoReply', { ...draft.autoReply, maxPerRound: v })} />
+        </Field>
+        <Field title="真实回复" hint="关闭时只生成草稿，可以在该会话里查看。开启后仍需上面的“允许真实发送”，并受每日上限和间隔限制。">
+          <Toggle label="自动回复真实发送" checked={draft.autoReply.send} disabled={ro} onChange={v => update('autoReply', { ...draft.autoReply, send: v })} />
+        </Field>
+        <label style={S.block}>
+          <span>跳过这些昵称</span>
+          <span style={S.muted}>比如你自己的昵称，每行一个。</span>
+          <ListInput
+            label="跳过这些昵称"
+            rows={2}
+            disabled={ro}
+            value={draft.autoReply.skipNames}
+            parse={t => t.split('\n').map(x => x.trim()).filter(Boolean)}
+            onChange={skipNames => update('autoReply', { ...draft.autoReply, skipNames })}
+          />
+        </label>
+        <div style={S.stats}>
+          <div style={S.stat}><div style={S.muted}>上次巡检</div><div style={S.statValue}>{formatTime(state.autoReplyStatus.lastRunAt)}</div></div>
+          <div style={S.stat}><div style={S.muted}>上次唤醒会话</div><div style={S.statValue}>{formatTime(state.autoReplyStatus.lastWakeAt)}</div></div>
+          <div style={S.stat}><div style={S.muted}>待处理新评论</div><div style={S.statValue}>{state.autoReplyStatus.pending}</div></div>
+        </div>
+        {state.autoReplyStatus.lastError && <div style={S.banner('warn')}>{state.autoReplyStatus.lastError}</div>}
+        {!ro && (
+          <div>
+            <button
+              type="button"
+              style={S.button(false, !state.settings.autoReply.enabled || checking)}
+              disabled={!state.settings.autoReply.enabled || checking}
+              onClick={() => { void checkNow() }}
+            >
+              {checking ? '检查中…' : '立即检查一次'}
+            </button>
+          </div>
         )}
       </section>
 

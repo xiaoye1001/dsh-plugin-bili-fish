@@ -99,6 +99,7 @@ test('settings page renders, edits, confirms and saves through the host', async 
   })
 
   await page.getByText('今日（').waitFor()
+  await page.getByRole('heading', { name: '自动回复' }).waitFor()
   await page.getByText('bilibili-mcp 未连接').waitFor()
   mkdirSync(new URL('../artifacts/', import.meta.url), { recursive: true })
   await page.screenshot({ path: new URL('../artifacts/settings-page.png', import.meta.url).pathname, fullPage: true })
@@ -120,6 +121,18 @@ test('settings page renders, edits, confirms and saves through the host', async 
   assert.deepEqual(host.updates, [{ sendEnabled: true, maxCommentsPerDay: 3 }])
   await page.getByText('真实发送已开启').waitFor()
   await page.getByText('0 / 3').waitFor()
+
+  // Video list: typing with Enter between ids must work.
+  const videos = page.getByLabel('要巡检的视频')
+  await videos.click()
+  await page.keyboard.type('BV1xx411c7mD')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('BV1yy411c7mE')
+  assert.equal(await videos.inputValue(), 'BV1xx411c7mD\nBV1yy411c7mE')
+  await page.getByRole('switch', { name: '开启自动回复' }).click()
+  await page.getByRole('button', { name: '保存' }).click()
+  await page.getByText('已保存，下一次工具调用即生效。').waitFor()
+  assert.deepEqual(host.updates.at(-1), { autoReply: { enabled: true, videos: ['BV1xx411c7mD', 'BV1yy411c7mE'] } })
 
   // Client-side validation blocks unsafe intervals before any request.
   await page.getByLabel('最小间隔（秒）').fill('5')

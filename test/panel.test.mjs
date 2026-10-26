@@ -250,3 +250,38 @@ test('client bundle registers the settings section through the module loader', (
   assert.equal(options.inject().ctx, fakeCtx)
   assert.equal(typeof component, 'function')
 })
+
+test('auto-reply settings: defaults, save, validation, and check gating', async () => {
+  const { rpc } = await boot()
+  const state = await rpc('state', null)
+  assert.deepEqual(state.value.settings.autoReply, { enabled: false, videos: [], intervalSec: 300, maxPerRound: 3, send: false, skipNames: [] })
+  assert.equal(state.value.autoReplyStatus.sessionId, 'bili-fish-autoreply')
+
+  const disabled = await rpc('check', null)
+  assert.equal(disabled.ok, false)
+  assert.equal(disabled.error.code, 'disabled')
+
+  for (const [patch, pattern] of [
+    [{ autoReply: { videos: ['not-a-bv'] } }, /BV/],
+    [{ autoReply: { intervalSec: 10 } }, /60/],
+    [{ autoReply: { maxPerRound: 99 } }, /1～10/],
+    [{ autoReply: { sessionId: 'x' } }, /不允许修改/],
+  ]) {
+    const r = await rpc('save', { patch, revision: 3 })
+    assert.equal(r.ok, false, JSON.stringify(patch))
+    assert.match(r.error.message, pattern)
+  }
+
+  const saved = await rpc('save', {
+    patch: { autoReply: { enabled: true, videos: ['BV1xx411c7mD', 'BV1xx411c7mD'], intervalSec: 600, skipNames: ['我'] } },
+    revision: 3,
+  })
+  assert.equal(saved.ok, true, JSON.stringify(saved))
+  assert.deepEqual(saved.value.settings.autoReply.videos, ['BV1xx411c7mD'], 'duplicates removed')
+  assert.equal(saved.value.settings.autoReply.enabled, true)
+
+  // Enabled now: a manual check runs a round (and reports the missing comments tool here).
+  const checked = await rpc('check', null)
+  assert.equal(checked.ok, true)
+  assert.match(checked.value.autoReplyStatus.lastError, /依赖缺失/)
+})

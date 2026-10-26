@@ -22,6 +22,13 @@ export interface PostResult {
  */
 export class BiliClient {
   private seq = 0
+  /** rpids of comments this plugin posted, so the auto-reply patrol never answers itself. */
+  private readonly posted = new Set<string>()
+
+  isOwnComment(rpid: string): boolean {
+    return this.posted.has(rpid)
+  }
+
   /** Tokens of this plugin's own executions that are currently calling a bilibili tool. */
   private readonly inFlight = new Set<ToolExecutionToken>()
 
@@ -101,7 +108,12 @@ export class BiliClient {
     if (result.isError) {
       throw new Error(`${name} 调用失败：${result.error.message}`)
     }
-    return { rpid: extractRpid(result.value) }
+    const rpid = extractRpid(result.value)
+    if (rpid) {
+      this.posted.add(rpid)
+      if (this.posted.size > 5_000) this.posted.delete(this.posted.values().next().value as string)
+    }
+    return { rpid }
   }
 }
 

@@ -12,6 +12,7 @@ import type {} from '@deepseek-ai/dsh-settings'
 import { configProblems, type Settings } from '../config.js'
 import type { SendGuard } from '../guard.js'
 import { FISH_PERSONA } from '../persona.js'
+import type { ReplyPatrol } from '../autoreply/watcher.js'
 import type { BiliClient } from '../bili-client.js'
 import { resolveTts } from '../tts.js'
 import {
@@ -35,13 +36,14 @@ export interface PanelDeps {
   bili: BiliClient
   /** Local profile entry id of this plugin instance, if loaded from one. */
   entryId: string | undefined
+  patrol: ReplyPatrol
 }
 
 const ok = <T>(value: T): RpcResult<T> => ({ ok: true, value })
 const fail = <T = never>(code: string, message: string, details: object = {}): RpcResult<T> =>
   ({ ok: false, error: { code, message, details } })
 
-export function buildState({ ctx, settings, guard, bili, entryId }: PanelDeps): PanelState {
+export function buildState({ ctx, settings, guard, bili, entryId, patrol }: PanelDeps): PanelState {
   const s = settings()
   return {
     settings: pickEditable(s),
@@ -61,6 +63,7 @@ export function buildState({ ctx, settings, guard, bili, entryId }: PanelDeps): 
     },
     persistence: persistence(ctx, entryId),
     defaultPersona: FISH_PERSONA,
+    autoReplyStatus: patrol.status(),
   }
 }
 
@@ -80,6 +83,14 @@ function pickEditable(s: Settings): EditableSettings {
       template: s.voiceFallback.template,
     },
     persona: { override: s.persona.override, extra: s.persona.extra },
+    autoReply: {
+      enabled: s.autoReply.enabled,
+      videos: [...s.autoReply.videos],
+      intervalSec: s.autoReply.intervalSec,
+      maxPerRound: s.autoReply.maxPerRound,
+      send: s.autoReply.send,
+      skipNames: [...s.autoReply.skipNames],
+    },
   }
 }
 
@@ -118,6 +129,14 @@ function str(path: string, v: unknown, maxLength: number, problems: Problem[], p
   return v
 }
 
+function strList(path: string, v: unknown, maxItems: number, problems: Problem[], pattern?: RegExp): string[] | undefined {
+  if (!Array.isArray(v) || v.length > maxItems || v.some(x => typeof x !== 'string' || x.length > 64 || (pattern && !pattern.test(x)))) {
+    problems.push(`${path} 必须是最多 ${maxItems} 项的列表${pattern ? '（每项为 BV 号）' : ''}`)
+    return undefined
+  }
+  return [...new Set(v as string[])]
+}
+
 function obj(path: string, v: unknown, allowed: readonly string[], problems: Problem[]): Record<string, unknown> | undefined {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) {
     problems.push(`${path} 必须是对象`)
@@ -136,7 +155,7 @@ export function validatePatch(input: unknown): { patch: Record<string, unknown> 
   const problems: Problem[] = []
   const root = obj('patch', input, [
     'sendEnabled', 'dryRunByDefault', 'maxCommentsPerDay', 'maxRepliesPerDay', 'minIntervalMs',
-    'replyDedupeWindowMs', 'voiceEnabled', 'tts', 'voiceFallback', 'persona',
+    'replyDedupeWindowMs', 'voiceEnabled', 'tts', 'voiceFallback', 'persona', 'autoReply',
   ], problems)
   if (!root) return { problems }
   const patch: Record<string, unknown> = {}
@@ -177,6 +196,19 @@ export function validatePatch(input: unknown): { patch: Record<string, unknown> 
       patch.persona = out
     }
   }
+  if ('autoReply' in root) {
+    const a = obj('autoReply', root.autoReply, ['enabled', 'videos', 'intervalSec', 'maxPerRound', 'send', 'skipNames'], problems)
+    if (a) {
+      const out: Record<string, unknown> = {}
+      if ('enabled' in a) out.enabled = bool('autoReply.enabled', a.enabled, problems)
+      if ('send' in a) out.send = bool('autoReply.send', a.send, problems)
+      if ('intervalSec' in a) out.intervalSec = int('autoReply.intervalSec', a.intervalSec, 60, 86400, problems)
+      if ('maxPerRound' in a) out.maxPerRound = int('autoReply.maxPerRound', a.maxPerRound, 1, 10, problems)
+      if ('videos' in a) out.videos = strList('autoReply.videos', a.videos, 50, problems, /^BV[0-9A-Za-z]{10}$/)
+      if ('skipNames' in a) out.skipNames = strList('autoReply.skipNames', a.skipNames, 20, problems)
+      patch.autoReply = out
+    }
+  }
   return problems.length > 0 ? { problems } : { patch }
 }
 
@@ -184,7 +216,9 @@ function merge(base: Record<string, unknown>, patch: Record<string, unknown>): R
   const out: Record<string, unknown> = { ...base }
   for (const [k, v] of Object.entries(patch)) {
     const prev = out[k]
-    out[k] = typeof v === 'object' && v !== null && typeof prev === 'object' && prev !== null
+    // Arrays replace wholesale (like the settings service does); only plain objects merge.
+    const mergeable = (x: unknown) => typeof x === 'object' && x !== null && !Array.isArray(x)
+    out[k] = mergeable(v) && mergeable(prev)
       ? merge(prev as Record<string, unknown>, v as Record<string, unknown>)
       : v
   }
@@ -198,6 +232,11 @@ export async function dispatch(deps: PanelDeps, endpoint: string, payload: unkno
         return ok(buildState(deps))
       case 'save':
         return await save(deps, payload)
+      case 'check':
+        // Run one patrol round now (it still respects every switch and limit).
+        if (!deps.settings().autoReply.enabled) return fail('disabled', '自动回复未开启')
+        await deps.patrol.runRound()
+        return ok(buildState(deps))
       default:
         return fail('unknown-endpoint', `unknown endpoint "${endpoint}"`)
     }
@@ -278,7 +317,7 @@ export function installPanelHost(deps: PanelDeps): void {
         return () => { void dispose() }
       }, `bili-fish: ${path} route`)
     }
-    console.info(`[bili-fish] 设置页接口已注册：POST ${endpointPath('state')}、${endpointPath('save')}`)
+    console.info(`[bili-fish] 设置页接口已注册：POST ${ENDPOINTS.map(endpointPath).join('、')}`)
   })
 
   ctx.inject(['settings'], (sub) => {

@@ -38,6 +38,22 @@
 2. 否则若 `voiceFallback.enabled: true`（默认关闭）→ 把音频以 multipart 上传到 `voiceFallback.uploadUrl`，从响应 JSON 的 `urlField` 取链接，按 `template` 拼进文字评论发出。
 3. 都不满足 → `{ skipped: true, reason: "voice_unsupported" }`，不会白白合成音频。
 
+## 自动回复（定时巡检）
+
+默认关闭，在设置页「自动回复」里开启。
+
+- **怎么巡检**：每隔一段时间（默认 5 分钟，最短 1 分钟），插件自己调用 `bilibili-mcp-server` 的 `bilibili_video_comments` 读取你填写的视频的评论。这一步不调用模型，不消耗额度。
+- **第一次只记录**：某个视频第一次被读取时，只记下已有评论，不会回复积压的旧评论。之后新出现的评论才会处理。插件重启后会重新记录一次，停机期间出现的评论可能被跳过。
+- **交给模型**：有新评论时，唤醒一个专用 DSH 会话（默认 id `bili-fish-autoreply`，可以在 DSH 里打开查看），把新评论以 JSON 交给大肥鱼，由它决定回不回、回什么。每轮最多交 3 条，多的留到下一轮；会话还在忙时就等下一轮。
+- **安全**：
+  - 评论是陌生人写的，可能藏着指令。唤醒前会把这个会话的工具限制成只有 `bili_build_prompt` 和 `bili_reply`；限制不上就不唤醒。
+  - 回复仍走 `bili_reply`，所以发送总开关、每日上限、发送间隔和 10 分钟去重全部照常生效。
+  - 「真实回复」默认关闭，只生成草稿；打开它并且打开「允许真实发送」才会真的发出去，开启时会弹确认框。
+  - 插件自己发的评论、以及「跳过这些昵称」里的昵称不会被回复。
+- **限制**：
+  - `bilibili_video_comments` 按 B 站默认的热度排序返回，每次最多 30 条。评论多的视频，新评论不一定在第一页，可能被漏掉。
+  - `bilibili-mcp-server` 的 `bilibili_detect_replies`（回复通知）不返回评论 id，没法用来定位回复，所以目前只能按视频巡检顶层评论，不处理楼中楼。
+
 ## 网页设置页
 
 DSH Web 的设置面板里会多出一页「大肥鱼 · B 站」：
@@ -49,7 +65,7 @@ DSH Web 的设置面板里会多出一页「大肥鱼 · B 站」：
 工作方式：
 
 - 浏览器半在 `src/client/`，打包成 `lib/client.js`，由 `package.json` 的 `dsh.client` 声明加载，注册到 `settings.section` 插槽。
-- 主进程半在 `src/panel/host.ts`，用 `ctx.connection.fetch.register` 在 DSH 自己的 `/api` 下注册两个接口：`POST /api/bili-fish/state` 和 `POST /api/bili-fish/save`，复用 DSH 网页的登录态。业务失败一律返回 `{ ok: false, error: { code, message, details } }`。
+- 主进程半在 `src/panel/host.ts`，用 `ctx.connection.fetch.register` 在 DSH 自己的 `/api` 下注册两个接口：`POST /api/bili-fish/state`、`/save` 和 `/check`（立即巡检一次），复用 DSH 网页的登录态。业务失败一律返回 `{ ok: false, error: { code, message, details } }`。
 - 没有用 `connection.rpc.handle` 新开顶层通道：那需要插件能看到 `webServer` 服务，而 profile 里安装的插件看不到它（启动时报 `cannot get property "webServer" without inject`，页面得到 405）。
 - 保存经 `ctx.settings.update(<entry id>, patch, revision)` 写入当前 profile 的 `cordis.patch.yml`。可编辑的字段都是 `.volatile()`，保存后原地生效、**不重载插件**，所以当日计数和去重不会被清零。
 - 主进程对 patch 做白名单 + 类型 + 下限校验，客户端也会提前提示；revision 不一致时返回 `conflict`，页面会重新加载。

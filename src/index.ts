@@ -13,6 +13,7 @@ import { BiliClient } from './bili-client.js'
 import { Config, assertConfig, resolveSettings } from './config.js'
 import { SendGuard } from './guard.js'
 import { installPanelHost } from './panel/host.js'
+import { ReplyPatrol } from './autoreply/watcher.js'
 import { createBuildPromptTool } from './tools/build-prompt.js'
 import { createCommentTool } from './tools/comment.js'
 import { createReplyTool } from './tools/reply.js'
@@ -55,8 +56,12 @@ export function apply(ctx: Context, config: Config) {
     return deps.bili.guardDirectCall(execution, blocked)
   })
 
+  const patrol = new ReplyPatrol({ ctx, settings, isOwnComment: rpid => deps.bili.isOwnComment(rpid) })
+  patrol.install()
+
   installPanelHost({
     ...deps,
+    patrol,
     entryId: (ctx.fiber as { entry?: { options?: { id?: string } } }).entry?.options?.id,
   })
 
