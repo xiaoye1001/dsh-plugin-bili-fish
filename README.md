@@ -1,6 +1,6 @@
 # @xiaoye1001/dsh-plugin-bili-fish
 
-“大肥鱼” B 站评论 / 回复 / 语音工具插件，面向 DeepSeek Harness（DSH）0.2.1-rc.3。
+“大肥鱼” B 站评论 / 回复 / 语音工具插件，面向 DeepSeek Harness（DSH）0.2.1-rc.2。
 
 函数插件形态（`name` / `inject = ['tools']` / `Config` / `apply`），注册 4 个模型工具。**默认只出草稿，不会写 B 站。**
 
