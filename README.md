@@ -27,7 +27,7 @@
 
 ## 依赖
 
-- **B 站 MCP 服务**：使用 [`bilibili-mcp-server`](https://www.npmjs.com/package/bilibili-mcp-server)（[GitHub](https://github.com/Iseenope/bilibili-mcp-server)，MIT，已验证 1.2.0）。它是 npm 上唯一能发评论的 B 站 MCP 服务。经 `@deepseek-ai/dsh-mcp-client` 以 `serverName: bilibili` 接入后，本插件调用 `mcp__bilibili__bilibili_reply`（参数 `videoId`、`message`，回复时加 `parentRpid` 和 `rootRpid`）。本插件不自己发 HTTP 请求，登录和 Cookie 由该服务管理，需要环境变量 `BILIBILI_SESSDATA`、`BILIBILI_BILI_JCT`、`BILIBILI_DEDE_USER_ID`（见 `cordis.patch.yml`）。它没有语音评论工具，所以 `bilibili.voiceTool` 默认留空。
+- **B 站 MCP 服务**：使用 [`bilibili-mcp-server`](https://www.npmjs.com/package/bilibili-mcp-server)（[GitHub](https://github.com/Iseenope/bilibili-mcp-server)，MIT，已验证 1.2.0）。它是 npm 上唯一能发评论的 B 站 MCP 服务。经 `@deepseek-ai/dsh-mcp-client` 以 `serverName: bilibili` 接入后，本插件调用 `mcp__bilibili__bilibili_reply`（参数 `videoId`、`message`，回复时加 `parentRpid` 和 `rootRpid`）。本插件不自己发 HTTP 请求，登录和 Cookie 由该服务管理，登录信息在设置页「B 站登录」里填写（见下）。它没有语音评论工具，所以 `bilibili.voiceTool` 默认留空。
 - **防止绕过**：插件注册了一个工具守卫，模型不能直接调用 `bilibili_reply`（以及默认列表里的删评论、点赞、投币、收藏、关注、发弹幕等写操作），只能经本插件的工具调用，从而始终受发送开关和频率限制约束。要放开其他写操作，清空 `bilibili.blockDirect`；回复工具始终受保护。
 - **TTS**：通过 `ctx.get(tts.service)` 获取一个提供 `synthesize({ text, voice, provider, signal }) => { audio, mime? }` 的服务（契约见 `src/tts.ts`）。找不到时 `bili_send_voice` 抛出“依赖缺失”错误，不会引入第三方 TTS 库。
 - `apply()` 时探测上述依赖，缺失只打 warn；草稿功能不受影响。
@@ -37,6 +37,15 @@
 1. `bilibili.voiceTool` 已配置且可见 → 调它，参数 `{ videoId, audioPath, message }`。
 2. 否则若 `voiceFallback.enabled: true`（默认关闭）→ 把音频以 multipart 上传到 `voiceFallback.uploadUrl`，从响应 JSON 的 `urlField` 取链接，按 `template` 拼进文字评论发出。
 3. 都不满足 → `{ skipped: true, reason: "voice_unsupported" }`，不会白白合成音频。
+
+## B 站登录
+
+设置页「B 站登录」有三个输入框：SESSDATA、bili_jct、DedeUserID（浏览器登录 bilibili.com 后，F12 → Application → Cookies 里复制）。
+
+- **存在哪**：写进 `~/.dsh/bili-fish/cookie.json`（若设了 `DSH_HOME` 则在其下；可用 `bilibili.cookieFile` 改路径）。文件权限 600、目录 700，原子替换。格式就是 `bilibili-mcp-server` 读取并在自动刷新时回写的格式，所以刷新后的登录也会留在这里。
+- **不回显**：页面只显示每项“已设置 / 未设置”和 uid，密钥值不会发回浏览器，也不写进 `cordis.patch.yml`。留空的输入框表示不修改。
+- **让服务读这个文件**（只需一次）：`mcp-bilibili` 条目的 `env` 只写 `BILIBILI_COOKIE_FILE: '<上面的路径>'`，删掉 `BILIBILI_SESSDATA` 等三项（环境变量会覆盖文件）。设置页里有可以直接复制的配置片段。
+- **生效**：`bilibili-mcp-server` 只在启动时读取一次登录信息，`dsh-mcp-client` 也没有热重连接口，所以保存或清除后需要重启 DSH。
 
 ## 自己逛（找视频、看视频、评论）
 
@@ -84,7 +93,7 @@ DSH Web 的设置面板里会多出一页「大肥鱼 · B 站」：
 工作方式：
 
 - 浏览器半在 `src/client/`，打包成 `lib/client.js`，由 `package.json` 的 `dsh.client` 声明加载，注册到 `settings.section` 插槽。
-- 主进程半在 `src/panel/host.ts`，用 `ctx.connection.fetch.register` 在 DSH 自己的 `/api` 下注册两个接口：`POST /api/bili-fish/state`、`/save`、`/check`（立即巡检一次）和 `/explore`（现在去逛一次），复用 DSH 网页的登录态。业务失败一律返回 `{ ok: false, error: { code, message, details } }`。
+- 主进程半在 `src/panel/host.ts`，用 `ctx.connection.fetch.register` 在 DSH 自己的 `/api` 下注册两个接口：`POST /api/bili-fish/state`、`/save`、`/check`（立即巡检一次）、`/explore`（现在去逛一次）、`/login` 和 `/logout`（保存 / 清除登录信息），复用 DSH 网页的登录态。业务失败一律返回 `{ ok: false, error: { code, message, details } }`。
 - 没有用 `connection.rpc.handle` 新开顶层通道：那需要插件能看到 `webServer` 服务，而 profile 里安装的插件看不到它（启动时报 `cannot get property "webServer" without inject`，页面得到 405）。
 - 保存经 `ctx.settings.update(<entry id>, patch, revision)` 写入当前 profile 的 `cordis.patch.yml`。可编辑的字段都是 `.volatile()`，保存后原地生效、**不重载插件**，所以当日计数和去重不会被清零。
 - 主进程对 patch 做白名单 + 类型 + 下限校验，客户端也会提前提示；revision 不一致时返回 `conflict`，页面会重新加载。

@@ -41,6 +41,8 @@ export interface Config {
     blockDirect: string[]
     /** 读取视频评论的工具公开名（自动回复巡检用）。 */
     commentsTool: string
+    /** 登录信息文件（bilibili-mcp-server 的 BILIBILI_COOKIE_FILE）；留空为 ~/.dsh/bili-fish/cookie.json。 */
+    cookieFile: string
     /** 自己逛 / 看视频用到的只读工具公开名。 */
     searchTool: string
     hotTool: string
@@ -183,6 +185,8 @@ const ConfigSchema = Schema.object({
       .description('禁止模型直接调用的其他 B 站写操作工具。清空则允许模型直接点赞、投币、关注等。'),
     commentsTool: Schema.string().default('mcp__bilibili__bilibili_video_comments')
       .description('读取视频评论的工具公开名（自动回复巡检用）。'),
+    cookieFile: Schema.string().default('')
+      .description('登录信息文件路径，供 bilibili-mcp-server 的 BILIBILI_COOKIE_FILE 使用；留空为 ~/.dsh/bili-fish/cookie.json。'),
     searchTool: Schema.string().default('mcp__bilibili__bilibili_search'),
     hotTool: Schema.string().default('mcp__bilibili__bilibili_hot'),
     userVideosTool: Schema.string().default('mcp__bilibili__bilibili_user_videos'),

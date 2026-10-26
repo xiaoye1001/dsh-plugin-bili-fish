@@ -142,6 +142,109 @@ function ListInput({ value, onChange, parse, disabled, rows, placeholder, label 
   )
 }
 
+/** Login values: kept only in this component, sent once, never read back. */
+function LoginCard({ ctx, state, onState, onNotice, readOnly }: {
+  ctx: ClientCtx
+  state: PanelState
+  onState: (s: PanelState) => void
+  onNotice: (n: { tone: 'ok' | 'error' | 'warn'; text: string }) => void
+  readOnly: boolean
+}) {
+  const login = state.login
+  const [sessdata, setSessdata] = useState('')
+  const [biliJct, setBiliJct] = useState('')
+  const [uid, setUid] = useState('')
+  const [show, setShow] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const typed = sessdata.trim() !== '' || biliJct.trim() !== '' || uid.trim() !== ''
+
+  const save = async () => {
+    setBusy(true)
+    try {
+      const next = await callRpc<PanelState>(ctx, 'login', { sessdata: sessdata.trim(), biliJct: biliJct.trim(), dedeUserId: uid.trim() })
+      onState(next)
+      setSessdata('')
+      setBiliJct('')
+      setUid('')
+      onNotice({ tone: 'warn', text: '登录信息已保存。需要重启 DSH，bilibili-mcp-server 才会用上新的登录信息。' })
+    } catch (error) {
+      onNotice({ tone: 'error', text: `保存登录信息失败：${error instanceof Error ? error.message : String(error)}` })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const clear = async () => {
+    if (!window.confirm('删除已保存的 B 站登录信息？删除后重启 DSH，bilibili-mcp-server 将处于未登录状态。')) return
+    setBusy(true)
+    try {
+      onState(await callRpc<PanelState>(ctx, 'logout', null))
+      onNotice({ tone: 'warn', text: '登录信息已删除，重启 DSH 后生效。' })
+    } catch (error) {
+      onNotice({ tone: 'error', text: `删除失败：${error instanceof Error ? error.message : String(error)}` })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const set = (ok: boolean) => <span style={S.badge(ok)}>{ok ? '已设置' : '未设置'}</span>
+  const secretType = show ? 'text' : 'password'
+
+  return (
+    <section style={S.card} aria-labelledby="bf-login">
+      <h2 id="bf-login" style={S.cardTitle}>B 站登录</h2>
+      <div style={S.muted}>
+        在浏览器登录 bilibili.com，按 F12 → Application（应用）→ Cookies → https://www.bilibili.com，复制下面三项的值。
+        它们只保存在本机的 {login.path}（仅当前用户可读），不会显示在这里，也不会写进配置文件。
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <span>SESSDATA {set(login.sessdata)}</span>
+        <span>bili_jct {set(login.biliJct)}</span>
+        <span>DedeUserID {login.dedeUserId ? <span style={S.badge(true)}>{login.dedeUserId}</span> : set(false)}</span>
+      </div>
+      <label style={S.block}>
+        <span>SESSDATA</span>
+        <input style={S.input} type={secretType} autoComplete="off" spellCheck={false} disabled={readOnly || busy}
+          placeholder={login.sessdata ? '已设置，留空表示不修改' : '粘贴 SESSDATA'} value={sessdata} onChange={e => setSessdata(e.target.value)} />
+      </label>
+      <label style={S.block}>
+        <span>bili_jct</span>
+        <input style={S.input} type={secretType} autoComplete="off" spellCheck={false} disabled={readOnly || busy}
+          placeholder={login.biliJct ? '已设置，留空表示不修改' : '32 位字母数字'} value={biliJct} onChange={e => setBiliJct(e.target.value)} />
+      </label>
+      <label style={S.block}>
+        <span>DedeUserID</span>
+        <input style={S.input} inputMode="numeric" autoComplete="off" disabled={readOnly || busy}
+          placeholder={login.dedeUserId ?? '你的 uid（纯数字）'} value={uid} onChange={e => setUid(e.target.value)} />
+      </label>
+      <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <input type="checkbox" checked={show} onChange={e => setShow(e.target.checked)} />
+        <span style={S.muted}>显示输入内容</span>
+      </label>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button type="button" style={S.button(true, readOnly || busy || !typed)} disabled={readOnly || busy || !typed} onClick={() => { void save() }}>
+          {busy ? '保存中…' : '保存登录信息'}
+        </button>
+        {(login.sessdata || login.biliJct || login.dedeUserId) && (
+          <button type="button" style={S.button(false, readOnly || busy)} disabled={readOnly || busy} onClick={() => { void clear() }}>清除</button>
+        )}
+      </div>
+      <div style={S.banner('warn')}>保存或清除后需要重启 DSH 才生效：bilibili-mcp-server 只在启动时读取一次登录信息。</div>
+      <details>
+        <summary style={{ cursor: 'pointer' }}>第一次使用：让 bilibili-mcp-server 读取这个文件</summary>
+        <div style={{ ...S.muted, margin: '8px 0' }}>
+          把 profile 的 cordis.patch.yml 里 mcp-bilibili 那一项换成下面这样（env 里不要再写 BILIBILI_SESSDATA 等三项，环境变量会覆盖文件）：
+        </div>
+        <pre style={{ ...S.textarea, whiteSpace: 'pre', overflowX: 'auto', margin: 0 }}>{login.mcpSnippet}</pre>
+        <button type="button" style={{ ...S.button(false, false), marginTop: 8 }} onClick={() => {
+          void navigator.clipboard?.writeText(login.mcpSnippet).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) })
+        }}>{copied ? '已复制' : '复制'}</button>
+      </details>
+    </section>
+  )
+}
+
 /** Fields that differ between the server copy and the draft, as a nested patch. */
 export function diffSettings(base: EditableSettings, draft: EditableSettings): Partial<EditableSettings> {
   const out: Record<string, unknown> = {}
@@ -377,6 +480,8 @@ export function BiliFishSection({ ctx }: { ctx: ClientCtx }) {
         </div>
         <div style={S.muted}>计数保存在内存里，DSH 重启后清零。</div>
       </section>
+
+      <LoginCard ctx={ctx} state={state} readOnly={false} onState={setState} onNotice={setNotice} />
 
       <section style={S.card} aria-labelledby="bf-send">
         <h2 id="bf-send" style={S.cardTitle}>发送</h2>

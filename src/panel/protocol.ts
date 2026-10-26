@@ -9,9 +9,9 @@
  */
 export const API_BASE = '/api/bili-fish'
 
-export type Endpoint = 'state' | 'save' | 'check' | 'explore'
+export type Endpoint = 'state' | 'save' | 'check' | 'explore' | 'login' | 'logout'
 
-export const ENDPOINTS: readonly Endpoint[] = ['state', 'save', 'check', 'explore']
+export const ENDPOINTS: readonly Endpoint[] = ['state', 'save', 'check', 'explore', 'login', 'logout']
 
 /** Absolute route path for one endpoint, e.g. `/api/bili-fish/state`. */
 export function endpointPath(endpoint: Endpoint): string {
@@ -102,6 +102,16 @@ export interface PanelState {
   defaultPersona: string
   autoReplyStatus: AutoReplyStatus
   exploreStatus: ExploreStatus
+  /** Which login values are stored; secrets are reported as set/unset only. */
+  login: {
+    path: string
+    sessdata: boolean
+    biliJct: boolean
+    dedeUserId: string | null
+    updatedAt: number | null
+    /** cordis.patch.yml entry pointing bilibili-mcp-server at the file. */
+    mcpSnippet: string
+  }
   recentlyCommented: string[]
 }
 

@@ -14,6 +14,7 @@ import type { SendGuard } from '../guard.js'
 import { FISH_PERSONA } from '../persona.js'
 import type { ReplyPatrol } from '../autoreply/watcher.js'
 import type { Explorer } from '../explore/explorer.js'
+import { clearLogin, cookieFilePath, mcpEntrySnippet, readLoginStatus, saveLogin, validateLogin } from '../login.js'
 import type { BiliClient } from '../bili-client.js'
 import { resolveTts } from '../tts.js'
 import {
@@ -45,8 +46,10 @@ const ok = <T>(value: T): RpcResult<T> => ({ ok: true, value })
 const fail = <T = never>(code: string, message: string, details: object = {}): RpcResult<T> =>
   ({ ok: false, error: { code, message, details } })
 
-export function buildState({ ctx, settings, guard, bili, entryId, patrol, explorer }: PanelDeps): PanelState {
+export async function buildState({ ctx, settings, guard, bili, entryId, patrol, explorer }: PanelDeps): Promise<PanelState> {
   const s = settings()
+  const cookiePath = cookieFilePath(s.bilibili.cookieFile)
+  const login = await readLoginStatus(cookiePath)
   return {
     settings: pickEditable(s),
     fixed: {
@@ -67,6 +70,7 @@ export function buildState({ ctx, settings, guard, bili, entryId, patrol, explor
     defaultPersona: FISH_PERSONA,
     autoReplyStatus: patrol.status(),
     exploreStatus: explorer.status(),
+    login: { ...login, mcpSnippet: mcpEntrySnippet(cookiePath) },
     recentlyCommented: guard.recentlyCommented(),
   }
 }
@@ -263,19 +267,37 @@ export async function dispatch(deps: PanelDeps, endpoint: string, payload: unkno
   try {
     switch (endpoint as Endpoint) {
       case 'state':
-        return ok(buildState(deps))
+        return ok(await buildState(deps))
       case 'save':
         return await save(deps, payload)
       case 'check':
         // Run one patrol round now (it still respects every switch and limit).
         if (!deps.settings().autoReply.enabled) return fail('disabled', '自动回复未开启')
         await deps.patrol.runRound()
-        return ok(buildState(deps))
+        return ok(await buildState(deps))
+      case 'login': {
+        // Secrets go straight to the cookie file; they are never echoed back.
+        const checked = validateLogin(payload)
+        if ('problems' in checked) return fail('invalid', checked.problems.join('；'), { problems: checked.problems })
+        try {
+          await saveLogin(cookieFilePath(deps.settings().bilibili.cookieFile), checked.value)
+        } catch (error) {
+          return fail('save-failed', `写入登录信息失败：${error instanceof Error ? error.message : String(error)}`)
+        }
+        return ok(await buildState(deps))
+      }
+      case 'logout':
+        try {
+          await clearLogin(cookieFilePath(deps.settings().bilibili.cookieFile))
+        } catch (error) {
+          return fail('save-failed', `删除登录信息失败：${error instanceof Error ? error.message : String(error)}`)
+        }
+        return ok(await buildState(deps))
       case 'explore':
         // Wake the exploration session once now (still within every limit; ignores the interval, not the switch).
         if (!deps.settings().explore.enabled) return fail('disabled', '自己逛未开启')
         await deps.explorer.round()
-        return ok(buildState(deps))
+        return ok(await buildState(deps))
       default:
         return fail('unknown-endpoint', `unknown endpoint "${endpoint}"`)
     }
@@ -306,7 +328,7 @@ async function save(deps: PanelDeps, payload: unknown): Promise<RpcResult<PanelS
     const code = (error as { code?: unknown })?.code === 'SETTINGS_CONFLICT' ? 'conflict' : 'save-failed'
     return fail(code, error instanceof Error ? error.message : String(error))
   }
-  return ok(buildState(deps))
+  return ok(await buildState(deps))
 }
 
 /** Serve one endpoint as a Fetch route: JSON body in, RpcResult JSON out (always HTTP 200 for handled calls). */

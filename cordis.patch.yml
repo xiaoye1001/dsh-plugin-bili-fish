@@ -5,8 +5,9 @@
 
 # 1) bilibili-mcp-server（npm: bilibili-mcp-server，github.com/Iseenope/bilibili-mcp-server）
 #    经官方桥 @deepseek-ai/dsh-mcp-client 接入，工具以 mcp__bilibili__bilibili_* 出现在 ctx.tools。
-#    登录信息从环境变量传入（浏览器 F12 → Application → Cookies → bilibili.com）：
-#      SESSDATA、bili_jct、DedeUserID。不要把它们写进这个文件。
+#    登录信息在设置页「B 站登录」里填写，保存到 ~/.dsh/bili-fish/cookie.json（仅当前用户可读），
+#    这里只把文件路径交给它。不要再在 env 里写 BILIBILI_SESSDATA 等三项：环境变量会覆盖文件。
+#    保存或修改登录信息后需要重启 DSH。
 - insert:
     - id: mcp-bilibili
       name: '@deepseek-ai/dsh-mcp-client'
@@ -16,9 +17,7 @@
         command: npx
         args: ['-y', 'bilibili-mcp-server@1.2.0']
         env:
-          BILIBILI_SESSDATA: !!js process.env.BILIBILI_SESSDATA
-          BILIBILI_BILI_JCT: !!js process.env.BILIBILI_BILI_JCT
-          BILIBILI_DEDE_USER_ID: !!js process.env.BILIBILI_DEDE_USER_ID
+          BILIBILI_COOKIE_FILE: '/root/.dsh/bili-fish/cookie.json'   # 换成设置页里显示的路径
 
 # 2) 本插件（指向源码构建产物 lib/index.js）。
 - insert:

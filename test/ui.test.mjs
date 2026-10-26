@@ -2,7 +2,9 @@
 // Chromium with real React; its RPC calls are routed through Playwright to the
 // real host handler of a plugin loaded on a real Cordis root.
 import assert from 'node:assert/strict'
-import { readFileSync, mkdirSync } from 'node:fs'
+import { readFileSync, mkdirSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { test } from 'node:test'
 import { build } from 'esbuild'
 import { createRequire } from 'node:module'
@@ -29,7 +31,8 @@ async function bootHost() {
   await root.plugin(ToolRegistry)
   let connection
   await root.plugin({ name: 'connection-host', apply(ctx) { connection = new HostConnectionService(ctx, [], {}) } })
-  const config = plugin.Config({})
+  const cookieFile = join(mkdtempSync(join(tmpdir(), 'bili-ui-')), 'cookie.json')
+  const config = plugin.Config({ bilibili: { cookieFile } })
   const updates = []
   const forms = {
     revision: 0,
@@ -47,7 +50,7 @@ async function bootHost() {
     },
   })
   const api = connection.createSharedFetchHandler('/api')
-  return { fetch: (request) => api.fetch(request, { principal: { kind: 'owner' } }), updates }
+  return { cookieFile, fetch: (request) => api.fetch(request, { principal: { kind: 'owner' } }), updates }
 }
 
 test('settings page renders, edits, confirms and saves through the host', async (t) => {
@@ -112,16 +115,31 @@ test('settings page renders, edits, confirms and saves through the host', async 
 
   // Declining the confirmation must not save.
   page.once('dialog', d => d.dismiss())
-  await page.getByRole('button', { name: '保存' }).click()
+  await page.getByRole('button', { name: '保存', exact: true }).click()
   await page.waitForTimeout(200)
   assert.equal(host.updates.length, 0)
 
   page.once('dialog', d => { assert.match(d.message(), /每天 3 条评论/); d.accept() })
-  await page.getByRole('button', { name: '保存' }).click()
+  await page.getByRole('button', { name: '保存', exact: true }).click()
   await page.getByText('已保存，下一次工具调用即生效。').waitFor()
   assert.deepEqual(host.updates, [{ sendEnabled: true, maxCommentsPerDay: 3 }])
   await page.getByText('真实发送已开启').waitFor()
   await page.getByText('0 / 3').waitFor()
+
+  // Login card: three values go to the cookie file and are cleared from the page.
+  const SESS = 'a1b2c3d4%2C1798000000%2Cabcde%2A11'
+  const JCT = '0123456789abcdef0123456789abcdef'
+  await page.getByLabel('SESSDATA').fill(SESS)
+  await page.getByLabel('bili_jct').fill(JCT)
+  await page.getByLabel('DedeUserID').fill('12345')
+  assert.equal(await page.getByLabel('SESSDATA').getAttribute('type'), 'password')
+  await page.getByRole('button', { name: '保存登录信息' }).click()
+  await page.getByText('登录信息已保存。需要重启 DSH').waitFor()
+  assert.deepEqual(JSON.parse(readFileSync(host.cookieFile, 'utf8')), { sessdata: SESS, bili_jct: JCT, dede_user_id: '12345' })
+  assert.equal(await page.getByLabel('SESSDATA').inputValue(), '')
+  assert.equal(await page.getByLabel('bili_jct').inputValue(), '')
+  assert.ok(!(await page.content()).includes(SESS), 'secret not rendered')
+  await page.getByText('12345', { exact: true }).waitFor()
 
   // Video list: typing with Enter between ids must work.
   const videos = page.getByLabel('要巡检的视频')
@@ -131,14 +149,14 @@ test('settings page renders, edits, confirms and saves through the host', async 
   await page.keyboard.type('BV1yy411c7mE')
   assert.equal(await videos.inputValue(), 'BV1xx411c7mD\nBV1yy411c7mE')
   await page.getByRole('switch', { name: '开启自动回复' }).click()
-  await page.getByRole('button', { name: '保存' }).click()
+  await page.getByRole('button', { name: '保存', exact: true }).click()
   await page.getByText('已保存，下一次工具调用即生效。').waitFor()
   assert.deepEqual(host.updates.at(-1), { autoReply: { enabled: true, videos: ['BV1xx411c7mD', 'BV1yy411c7mE'] } })
 
   // Client-side validation blocks unsafe intervals before any request.
   await page.getByLabel('最小间隔（秒）').fill('5')
   await page.getByText('发送间隔不能低于 12 秒').waitFor()
-  assert.equal(await page.getByRole('button', { name: '保存' }).isDisabled(), true)
+  assert.equal(await page.getByRole('button', { name: '保存', exact: true }).isDisabled(), true)
   await page.getByRole('button', { name: '撤销' }).click()
 
   await page.screenshot({ path: new URL('../artifacts/settings-page-saved.png', import.meta.url).pathname, fullPage: true })
