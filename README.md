@@ -1,4 +1,4 @@
-# @your-scope/dsh-plugin-bili-fish
+# @xiaoye1001/dsh-plugin-bili-fish
 
 “大肥鱼” B 站评论 / 回复 / 语音工具插件，面向 DeepSeek Harness（DSH）0.2.1-rc.3。
 

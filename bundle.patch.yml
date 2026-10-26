@@ -5,7 +5,7 @@
 # 覆盖——注意 patch 会整行替换 config，需重述所有要改的键。
 - insert:
     - id: bili-fish
-      name: '@your-scope/dsh-plugin-bili-fish'
+      name: '@xiaoye1001/dsh-plugin-bili-fish'
       config:
         sendEnabled: false
         dryRunByDefault: true

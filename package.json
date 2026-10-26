@@ -1,8 +1,16 @@
 {
-  "name": "@your-scope/dsh-plugin-bili-fish",
+  "name": "@xiaoye1001/dsh-plugin-bili-fish",
   "version": "0.1.0",
   "description": "“大肥鱼” B 站评论 / 回复 / 语音工具插件（DeepSeek Harness 函数插件，默认只出草稿）",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xiaoye1001/dsh-plugin-bili-fish.git"
+  },
+  "homepage": "https://github.com/xiaoye1001/dsh-plugin-bili-fish#readme",
+  "bugs": {
+    "url": "https://github.com/xiaoye1001/dsh-plugin-bili-fish/issues"
+  },
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
