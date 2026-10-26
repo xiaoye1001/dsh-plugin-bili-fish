@@ -46,6 +46,7 @@ async function boot({ raw = {}, settings = true, entryId = ENTRY, revision = 3 }
     },
   })
 
+  root.provide('webServer', { protocol: 'http:', register: () => () => {} })
   let handler
   root.provide('connection', {
     rpc: {

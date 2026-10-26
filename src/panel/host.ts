@@ -239,9 +239,14 @@ export function installPanelHost(deps: PanelDeps): void {
   const { ctx } = deps
   const pluginFiber = ctx.fiber
 
-  ctx.inject(['connection'], (sub) => {
+  // rpc.handle() mounts the channel through *this* context's webServer, and
+  // DSH publishes `connection` before the web server is up. Wait for both, or
+  // the route is never registered and the page's POSTs fall through to the
+  // index fallback (HTTP 405). Re-runs if the web server is replaced.
+  ctx.inject(['connection', 'webServer'], (sub) => {
     sub.effect(() => {
       const dispose = sub.connection.rpc.handle(RPC_CHANNEL, (endpoint, payload) => dispatch(deps, endpoint, payload))
+      ctx.logger('bili-fish').info(`settings page channel ${RPC_CHANNEL} registered`)
       return () => { void dispose() }
     }, 'bili-fish: rpc channel')
   })

@@ -26,6 +26,7 @@ async function bootHost() {
   const root = new Context()
   await root.plugin(SystemPrompt)
   await root.plugin(ToolRegistry)
+  root.provide('webServer', { protocol: 'http:', register: () => () => {} })
   let handler
   root.provide('connection', { rpc: { handle: (_c, fn) => { handler = fn; return async () => {} } } })
   const config = plugin.Config({})
