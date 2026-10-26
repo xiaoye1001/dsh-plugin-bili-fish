@@ -1,9 +1,22 @@
 // Wire contract between the host RPC channel and the browser settings page.
 // Pure types and data: imported by both halves, so no Node APIs here.
 
-export const RPC_CHANNEL = '/bili-fish'
+/**
+ * The page talks to the host through exact routes under DSH's own `/api`
+ * channel (`ctx.connection.fetch.register`). That route is mounted and
+ * authenticated by the Connection service itself, so the plugin never needs
+ * the `webServer` service, which a profile plugin may not be able to see.
+ */
+export const API_BASE = '/api/bili-fish'
 
 export type Endpoint = 'state' | 'save'
+
+export const ENDPOINTS: readonly Endpoint[] = ['state', 'save']
+
+/** Absolute route path for one endpoint, e.g. `/api/bili-fish/state`. */
+export function endpointPath(endpoint: Endpoint): string {
+  return `${API_BASE}/${endpoint}`
+}
 
 /** The fields the settings page may change. All of them are `.volatile()` in Config. */
 export interface EditableSettings {

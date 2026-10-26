@@ -1,7 +1,8 @@
-// Regression test for "transport failure for /bili-fish/state: HTTP 405".
-// Uses the real HostConnectionService from @deepseek-ai/dsh-client-connection:
-// in DSH it is published before the web server exists, and its rpc.handle()
-// registers the channel through the *caller's* ctx.webServer.
+// Regression tests for the settings page's "HTTP 405".
+// In a real DSH profile the plugin cannot see the `webServer` service
+// ("cannot get property webServer without inject"), so it must not depend on
+// it. These use the real HostConnectionService from dsh-client-connection and
+// send requests through its real shared /api dispatcher, like the browser.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
@@ -10,51 +11,39 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRegistry from '@deepseek-ai/dsh-tools'
 import * as plugin from '../lib/index.js'
 
-function fakeWebServer() {
-  const routes = new Map()
-  return {
-    routes,
-    service: {
-      protocol: 'http:',
-      register(route) {
-        if (routes.has(route.path)) throw new Error(`duplicate ${route.path}`)
-        routes.set(route.path, route)
-        return () => routes.delete(route.path)
-      },
-    },
-  }
-}
-
-async function bootHarness() {
+async function boot() {
   const root = new Context()
-  const errors = []
-  root.on('internal/error', (e) => errors.push(e))
   await root.plugin(SystemPrompt)
   await root.plugin(ToolRegistry)
-  // Real Connection service, constructed the way its plugin does (minus browser auth).
-  await root.plugin({ name: 'connection-host', apply(ctx) { new HostConnectionService(ctx, [], {}) } })
-  return { root, errors }
+  let connection
+  await root.plugin({ name: 'connection-host', apply(ctx) { connection = new HostConnectionService(ctx, [], {}) } })
+  const fiber = await root.plugin(plugin, {})
+  const api = connection.createSharedFetchHandler('/api')
+  const post = (path) => api.fetch(
+    new Request(`http://127.0.0.1:3080${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: 'null' }),
+    { principal: { kind: 'owner' } },
+  )
+  return { root, fiber, post }
 }
 
-test('rpc channel is registered when the web server starts after the plugin', async () => {
-  const { root } = await bootHarness()
-  await root.plugin(plugin, {})
-  const web = fakeWebServer()
-  assert.equal(web.routes.has('/bili-fish'), false)
-
-  // DSH brings the web server up after Connection and after ordinary plugins.
-  const fiber = root.provide('webServer', web.service)
-  await new Promise(r => setTimeout(r, 20))
-  assert.ok(web.routes.has('/bili-fish'), 'POST /bili-fish/* must reach the plugin, not the page fallback')
-  assert.equal(web.routes.get('/bili-fish').kind, 'prefix')
-  void fiber
+test('page routes work with no webServer visible to the plugin', async () => {
+  const { post } = await boot()
+  const res = await post('/api/bili-fish/state')
+  assert.equal(res.status, 200)
+  const body = await res.json()
+  assert.equal(body.ok, true)
+  assert.equal(body.value.settings.sendEnabled, false)
 })
 
-test('rpc channel is registered when the web server already exists', async () => {
-  const { root } = await bootHarness()
-  const web = fakeWebServer()
-  root.provide('webServer', web.service)
+test('the old top-level channel is gone', async () => {
+  const { post } = await boot()
+  assert.equal((await post('/api/bili-fish/unknown')).status, 404)
+})
+
+test('unloading the plugin removes its routes, and reloading does not collide', async () => {
+  const { root, fiber, post } = await boot()
+  await fiber.dispose()
+  assert.equal((await post('/api/bili-fish/state')).status, 404)
   await root.plugin(plugin, {})
-  await new Promise(r => setTimeout(r, 20))
-  assert.ok(web.routes.has('/bili-fish'))
+  assert.equal((await post('/api/bili-fish/state')).status, 200)
 })

@@ -49,7 +49,8 @@ DSH Web 的设置面板里会多出一页「大肥鱼 · B 站」：
 工作方式：
 
 - 浏览器半在 `src/client/`，打包成 `lib/client.js`，由 `package.json` 的 `dsh.client` 声明加载，注册到 `settings.section` 插槽。
-- 主进程半在 `src/panel/host.ts`，通过 Connection RPC 通道 `/bili-fish` 提供 `state` / `save` 两个端点，失败一律返回 `{ ok: false, error: { code, message, details } }`。
+- 主进程半在 `src/panel/host.ts`，用 `ctx.connection.fetch.register` 在 DSH 自己的 `/api` 下注册两个接口：`POST /api/bili-fish/state` 和 `POST /api/bili-fish/save`，复用 DSH 网页的登录态。业务失败一律返回 `{ ok: false, error: { code, message, details } }`。
+- 没有用 `connection.rpc.handle` 新开顶层通道：那需要插件能看到 `webServer` 服务，而 profile 里安装的插件看不到它（启动时报 `cannot get property "webServer" without inject`，页面得到 405）。
 - 保存经 `ctx.settings.update(<entry id>, patch, revision)` 写入当前 profile 的 `cordis.patch.yml`。可编辑的字段都是 `.volatile()`，保存后原地生效、**不重载插件**，所以当日计数和去重不会被清零。
 - 主进程对 patch 做白名单 + 类型 + 下限校验，客户端也会提前提示；revision 不一致时返回 `conflict`，页面会重新加载。
 - 缺少 `@deepseek-ai/dsh-settings`，或条目被 home 层 / `--patch` 覆盖时，页面变为只读并说明原因。工具本身不依赖设置页。

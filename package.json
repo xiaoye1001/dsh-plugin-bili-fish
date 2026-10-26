@@ -46,9 +46,7 @@
     },
     "client": {
       "platform": "web",
-      "inject": [
-        "@deepseek-ai/dsh-client-connection"
-      ]
+      "inject": []
     }
   },
   "dependencies": {

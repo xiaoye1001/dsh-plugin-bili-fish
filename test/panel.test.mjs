@@ -1,5 +1,6 @@
 // Settings-page tests: the host RPC channel on a real Cordis root + dsh-tools
-// registry, with fake `connection` and `settings` services. The fake settings
+// registry, the real Connection service (requests go through its /api
+// dispatcher exactly as the browser's do) and a fake `settings` service. The fake settings
 // service writes into the plugin's real volatile refs via cosmokit's
 // updateVolatile — the same mechanism the DSH Loader uses after a save.
 import assert from 'node:assert/strict'
@@ -11,7 +12,7 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRegistry from '@deepseek-ai/dsh-tools'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import * as plugin from '../lib/index.js'
-import { RPC_CHANNEL } from '../lib/panel/protocol.js'
+import { HostConnectionService } from '@deepseek-ai/dsh-client-connection'
 
 const ENTRY = 'bili-fish'
 const VIDEO = 'BV1xx411c7mD'
@@ -46,17 +47,9 @@ async function boot({ raw = {}, settings = true, entryId = ENTRY, revision = 3 }
     },
   })
 
-  root.provide('webServer', { protocol: 'http:', register: () => () => {} })
-  let handler
-  root.provide('connection', {
-    rpc: {
-      handle(channel, fn) {
-        assert.equal(channel, RPC_CHANNEL)
-        handler = fn
-        return async () => { handler = undefined }
-      },
-    },
-  })
+  // Real Connection service (no web server at all — like a profile plugin that cannot see it).
+  let connection
+  await root.plugin({ name: 'connection-host', apply(ctx) { connection = new HostConnectionService(ctx, [], {}) } })
 
   const config = plugin.Config(raw)
   const updates = []
@@ -89,12 +82,21 @@ async function boot({ raw = {}, settings = true, entryId = ENTRY, revision = 3 }
   })
 
   let n = 0
+  // Same path the browser takes: POST /api/bili-fish/<endpoint> through the shared /api handler.
+  const api = connection.createSharedFetchHandler('/api')
+  const post = (endpoint, body, principal = 'owner') => api.fetch(
+    new Request(`http://127.0.0.1:3080/api/bili-fish/${endpoint}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: typeof body === 'string' ? body : JSON.stringify(body),
+    }),
+    { principal: { kind: principal } },
+  )
   const rpc = async (endpoint, payload) => {
-    assert.ok(handler, 'rpc channel registered')
-    return handler(endpoint, payload, new AbortController().signal, {})
+    const res = await post(endpoint, payload ?? null)
+    if (res.status !== 200) throw new Error(`HTTP ${res.status}`)
+    return res.json()
   }
   const tool = (name, args) => root.tools.execute({ callId: ToolCallId(`p${++n}`), name, arguments: args, signal: new AbortController().signal })
-  return { root, rpc, tool, updates, policies, forms, mcpCalls }
+  return { root, rpc, post, tool, updates, policies, forms, mcpCalls }
 }
 
 test('state reports settings, usage, dependencies and a writable revision', async () => {
@@ -199,16 +201,19 @@ test('an entry the settings service does not expose is read-only', async () => {
   assert.match(state.value.persistence.reason, /other-id/)
 })
 
-test('unknown endpoints fail with a code instead of throwing', async () => {
-  const { rpc } = await boot()
-  const r = await rpc('reset-counters', {})
-  assert.deepEqual(r, { ok: false, error: { code: 'unknown-endpoint', message: 'unknown endpoint "reset-counters"', details: {} } })
+test('only the two routes exist, only for the owner, only as JSON POST', async () => {
+  const { post } = await boot()
+  assert.equal((await post('reset-counters', {})).status, 404)
+  assert.equal((await post('state', null, 'guest')).status, 403)
+  const bad = await post('state', '{not json')
+  assert.equal(bad.status, 400)
+  assert.equal((await bad.json()).error.code, 'bad-request')
 })
 
 test('plugin dispose removes the RPC channel', async () => {
   const { root, rpc } = await boot()
   await root.fiber.dispose()
-  await assert.rejects(() => rpc('state', null), /rpc channel registered/)
+  await assert.rejects(() => rpc('state', null), /HTTP 404/)
 })
 
 test('client bundle registers the settings section through the module loader', () => {
@@ -226,11 +231,10 @@ test('client bundle registers the settings section through the module loader', (
     return { jsx: () => null, jsxs: () => null, Fragment: 'f', useState: () => [], useEffect() {}, useMemo() {}, useRef: () => ({}), useCallback: f => f }
   })
   assert.deepEqual([...new Set(requested)].sort(), ['react', 'react/jsx-runtime'])
-  assert.deepEqual(mod.inject, ['slots', 'connection'])
+  assert.deepEqual(mod.inject, ['slots'])
 
   const registered = []
   const fakeCtx = {
-    connection: { rpc: { call: async () => ({ ok: true, value: null }) } },
     slots: {
       inject: (name, cb) => { assert.equal(name, 'settings.section'); cb() },
       register: (options, component) => { registered.push({ options, component }); return () => {} },

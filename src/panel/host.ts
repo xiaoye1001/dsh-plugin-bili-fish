@@ -19,7 +19,8 @@ import {
   MAX_COMMENTS_CAP,
   MAX_REPLIES_CAP,
   MIN_INTERVAL_FLOOR_MS,
-  RPC_CHANNEL,
+  ENDPOINTS,
+  endpointPath,
   type EditableSettings,
   type Endpoint,
   type PanelState,
@@ -230,31 +231,54 @@ async function save(deps: PanelDeps, payload: unknown): Promise<RpcResult<PanelS
   return ok(buildState(deps))
 }
 
+/** Serve one endpoint as a Fetch route: JSON body in, RpcResult JSON out (always HTTP 200 for handled calls). */
+export async function handleFetch(deps: PanelDeps, endpoint: Endpoint, request: Request): Promise<Response> {
+  let payload: unknown = null
+  try {
+    const text = await request.text()
+    payload = text.trim() === '' ? null : JSON.parse(text)
+  } catch {
+    return Response.json(fail('bad-request', 'request body is not JSON'), { status: 400 })
+  }
+  return Response.json(await dispatch(deps, endpoint, payload))
+}
+
 /**
- * Register the RPC channel while ctx.connection exists, and tell the settings
- * service this plugin ships its own page. Both are optional: without them the
- * tools still work and the page simply isn't available.
+ * Register the page's routes while ctx.connection exists, and tell the
+ * settings service this plugin ships its own page. Both are optional: without
+ * them the tools still work and the page simply isn't available.
+ *
+ * Why not `connection.rpc.handle()`: it mounts a new top-level route through
+ * the caller's `webServer`, and in a real DSH profile that service lives in a
+ * part of the plugin tree a profile plugin cannot see ("cannot get property
+ * webServer without inject"), so the route was never mounted and the page got
+ * HTTP 405. Exact routes under `/api` only touch the Connection service.
  */
 export function installPanelHost(deps: PanelDeps): void {
   const { ctx } = deps
   const pluginFiber = ctx.fiber
 
-  // rpc.handle() mounts the channel through *this* context's webServer, and
-  // DSH publishes `connection` before the web server is up. Wait for both, or
-  // the route is never registered and the page's POSTs fall through to the
-  // index fallback (HTTP 405). Re-runs if the web server is replaced.
-  ctx.inject(['connection', 'webServer'], (sub) => {
-    sub.effect(() => {
-      let dispose: () => unknown
-      try {
-        dispose = sub.connection.rpc.handle(RPC_CHANNEL, (endpoint, payload) => dispatch(deps, endpoint, payload))
-      } catch (error) {
-        console.error(`[bili-fish] 设置页通道 ${RPC_CHANNEL} 注册失败：`, error)
-        throw error
-      }
-      console.info(`[bili-fish] 设置页通道已注册：POST ${RPC_CHANNEL}/state`)
-      return () => { void dispose() }
-    }, 'bili-fish: rpc channel')
+  ctx.inject(['connection'], (sub) => {
+    for (const endpoint of ENDPOINTS) {
+      const path = endpointPath(endpoint)
+      sub.effect(() => {
+        let dispose: () => Promise<void>
+        try {
+          dispose = sub.connection.fetch.register({
+            path,
+            methods: ['POST'],
+            requestBody: 'buffered',
+            fetch: request => handleFetch(deps, endpoint, request),
+          })
+        } catch (error) {
+          console.error(`[bili-fish] 设置页接口 ${path} 注册失败：`, error)
+          throw error
+        }
+        // Dispose explicitly from our own effect, so the route always leaves with this plugin.
+        return () => { void dispose() }
+      }, `bili-fish: ${path} route`)
+    }
+    console.info(`[bili-fish] 设置页接口已注册：POST ${endpointPath('state')}、${endpointPath('save')}`)
   })
 
   ctx.inject(['settings'], (sub) => {

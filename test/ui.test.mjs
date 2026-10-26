@@ -11,6 +11,7 @@ import { createVolatile, isVolatile, updateVolatile } from '@deepseek-ai/cosmoki
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRegistry from '@deepseek-ai/dsh-tools'
 import * as plugin from '../lib/index.js'
+import { HostConnectionService } from '@deepseek-ai/dsh-client-connection'
 
 // Playwright is provided by the environment (pre-installed Chromium), not a package dependency.
 const { chromium } = createRequire(import.meta.url)('playwright')
@@ -26,9 +27,8 @@ async function bootHost() {
   const root = new Context()
   await root.plugin(SystemPrompt)
   await root.plugin(ToolRegistry)
-  root.provide('webServer', { protocol: 'http:', register: () => () => {} })
-  let handler
-  root.provide('connection', { rpc: { handle: (_c, fn) => { handler = fn; return async () => {} } } })
+  let connection
+  await root.plugin({ name: 'connection-host', apply(ctx) { connection = new HostConnectionService(ctx, [], {}) } })
   const config = plugin.Config({})
   const updates = []
   const forms = {
@@ -46,7 +46,8 @@ async function bootHost() {
       plugin.apply(ctx, config)
     },
   })
-  return { call: (endpoint, payload) => handler(endpoint, payload, new AbortController().signal, {}), updates }
+  const api = connection.createSharedFetchHandler('/api')
+  return { fetch: (request) => api.fetch(request, { principal: { kind: 'owner' } }), updates }
 }
 
 test('settings page renders, edits, confirms and saves through the host', async (t) => {
@@ -61,9 +62,20 @@ test('settings page renders, edits, confirms and saves through the host', async 
   const errors = []
   page.on('pageerror', e => errors.push(e.message))
   page.on('console', m => { if (m.type() === 'error') errors.push(m.text()) })
-  await page.exposeFunction('hostRpc', (endpoint, payload) => host.call(endpoint, payload))
+  const apiCalls = []
+  // The page's relative fetch('api/bili-fish/…') goes to the real Connection /api dispatcher.
+  await page.route('http://dsh.test/api/**', async (route) => {
+    const req = route.request()
+    apiCalls.push(new URL(req.url()).pathname)
+    const res = await host.fetch(new Request(req.url(), { method: req.method(), headers: req.headers(), body: req.postData() ?? undefined }))
+    await route.fulfill({ status: res.status, headers: Object.fromEntries(res.headers), body: Buffer.from(await res.arrayBuffer()) })
+  })
+  await page.route('http://dsh.test/', route => route.fulfill({
+    contentType: 'text/html',
+    body: '<!doctype html><html><body style="font-family: system-ui; padding: 24px"><div id="root"></div></body></html>',
+  }))
 
-  await page.setContent('<!doctype html><html><body style="font-family: system-ui; padding: 24px"><div id="root"></div></body></html>')
+  await page.goto('http://dsh.test/')
   await page.addScriptTag({ content: shim.outputFiles[0].text })
   await page.addScriptTag({
     content: `window.__ModuleLoader__ = { load(def) { window.__biliFish = def.factory(id => {
@@ -73,7 +85,6 @@ test('settings page renders, edits, confirms and saves through the host', async 
   await page.evaluate(() => {
     const mod = window.__biliFish
     const ctx = {
-      connection: { rpc: { call: (channel, endpoint, payload) => window.hostRpc(endpoint, payload) } },
       slots: {
         inject: (_name, cb) => cb(),
         register: (options, Component) => {
@@ -119,5 +130,6 @@ test('settings page renders, edits, confirms and saves through the host', async 
   await page.screenshot({ path: new URL('../artifacts/settings-page-saved.png', import.meta.url).pathname, fullPage: true })
   await page.evaluate(() => { document.body.style.background = '#1f2023'; document.body.style.color = '#e8e8ea' })
   await page.screenshot({ path: new URL('../artifacts/settings-page-dark.png', import.meta.url).pathname, fullPage: true })
+  assert.ok(apiCalls.includes('/api/bili-fish/state') && apiCalls.includes('/api/bili-fish/save'), JSON.stringify(apiCalls))
   assert.deepEqual(errors, [])
 })
