@@ -42,10 +42,38 @@ export class BiliClient {
     return this.config.voiceTool || undefined
   }
 
-  /** Whether a tool is visible to the calling agent right now (MCP tools come and go with reconnects). */
+  /**
+   * Whether the plugin can reach a bilibili-mcp tool right now (MCP tools come
+   * and go with reconnects). See {@link scopeFor}: a tool hidden from a
+   * restricted session but registered globally still counts.
+   */
   has(name: string | undefined, exec?: Pick<ToolRunContext, 'agent'>): boolean {
-    if (!name) return false
-    return this.ctx.tools.get(name, exec?.agent) !== undefined
+    return this.scopeFor(name, exec) !== null
+  }
+
+  /**
+   * Where to run a nested bilibili-mcp call. The calling agent's view first,
+   * so normal sessions behave exactly as before; otherwise the global view.
+   *
+   * The fallback exists for the plugin's own sessions (auto-reply, explore):
+   * they are restricted to the plugin's tools with tools.restrict({ allow }),
+   * which also hides the MCP tools those tools call internally. The model in
+   * such a session still cannot call the MCP tools itself — only these nested
+   * calls, made with this execution as parent, reach them.
+   * @returns `{ agent }` / `{}` for the scope to execute in, or null when the tool is not registered at all.
+   */
+  private scopeFor(name: string | undefined, exec?: Pick<ToolRunContext, 'agent'>): { agent?: ToolRunContext['agent'] } | null {
+    if (!name) return null
+    const agent = exec?.agent
+    if (agent !== undefined && this.ctx.tools.get(name, agent) !== undefined) return { agent }
+    return this.ctx.tools.get(name) !== undefined ? {} : null
+  }
+
+  /** Execution-input scope for a nested call; throws a clear error when the tool is not registered. */
+  private nestedScope(name: string, exec: ToolRunContext): { agent?: ToolRunContext['agent'] } {
+    const scope = this.scopeFor(name, exec)
+    if (!scope) throw new Error(`${name} 未注册：bilibili-mcp-server 没有接入或没有连接`)
+    return scope.agent !== undefined ? { agent: scope.agent } : {}
   }
 
   /**
@@ -99,7 +127,7 @@ export class BiliClient {
       arguments: args,
       signal: exec.signal,
       parent: exec.token,
-      ...(exec.agent !== undefined ? { agent: exec.agent } : {}),
+      ...this.nestedScope(name, exec),
     })
     if (result.isError) throw new Error(result.error.message)
     const content = (result.value as { content?: unknown } | null)?.content
@@ -126,7 +154,7 @@ export class BiliClient {
       arguments: args,
       signal: exec.signal,
       parent: exec.token,
-      ...(exec.agent !== undefined ? { agent: exec.agent } : {}),
+      ...this.nestedScope(name, exec),
     })
     if (result.isError) {
       throw new Error(`${name} 调用失败：${result.error.message}`)

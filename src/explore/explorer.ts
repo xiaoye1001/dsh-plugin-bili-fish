@@ -83,6 +83,15 @@ export class Explorer {
     this.running = true
     try {
       const s = this.deps.settings()
+      // Don't spend a model turn on a round that cannot work: the read tools
+      // bili_discover / bili_watch_video need must be registered (globally).
+      const b = s.bilibili
+      const needed = [s.explore.interests.length > 0 ? b.searchTool : b.hotTool, b.userVideosTool, b.videoInfoTool]
+      const missing = needed.filter(name => this.deps.ctx.tools.get(name) === undefined)
+      if (missing.length > 0) {
+        this.lastError = `bilibili-mcp-server 未接入或未连接（缺少 ${missing.join('、')}），本轮跳过，未唤醒会话`
+        return
+      }
       const agent = await this.deps.door.open(s.explore.sessionId, EXPLORE_TOOLS)
       if (typeof agent === 'string') {
         this.lastError = agent
@@ -139,6 +148,7 @@ export function renderExplore(o: { keyword: string | null; watch: number; commen
         + `要评论就先调用 bili_build_prompt(kind="comment", context=视频标题+你看到的要点)，再调用 bili_comment，dryRun=${o.send ? 'false' : 'true'}。`,
     '评论要和这个视频的具体内容有关，不要写放哪都成立的话。标了“最近评论过”的不要再评论。',
     '如果返回 rate_limited、send_disabled 或 already_commented，就停下这一条，不要换说法重试。',
+    '如果工具报“未注册”或其它连接错误，这一轮就到此为止，说明原因即可，不要换关键词重试。',
     o.recent.length > 0 ? `最近评论过的视频：${o.recent.join('、')}` : '',
     '最后用两三句话说说看了什么、觉得怎么样、评论了哪个。',
   ].filter(Boolean).join('\n')

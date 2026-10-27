@@ -311,8 +311,8 @@ test('exploration settings: save, validation, and explore gating', async () => {
   assert.equal(saved.ok, true, JSON.stringify(saved))
   assert.deepEqual(saved.value.settings.explore.interests, ['猫', '做饭'])
   assert.equal(saved.value.exploreStatus.nextKeyword, '猫')
-  // Enabled: a manual round runs and reports that the session service is missing in this harness.
+  // Enabled: a manual round runs; this harness has no bilibili-mcp, so it is skipped before waking the model.
   const ran = await rpc('explore', null)
   assert.equal(ran.ok, true)
-  assert.match(ran.value.exploreStatus.lastError, /会话服务不可用/)
+  assert.match(ran.value.exploreStatus.lastError, /未接入或未连接/)
 })

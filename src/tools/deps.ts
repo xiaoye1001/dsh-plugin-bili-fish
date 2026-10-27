@@ -13,5 +13,5 @@ export interface ToolDeps {
 }
 
 export function missingTool(name: string): string {
-  return `依赖缺失：当前不可见工具 ${name}。请确认已用 @deepseek-ai/dsh-mcp-client 接入 bilibili-mcp-server（serverName: bilibili）并已连接、已登录。`
+  return `依赖缺失：${name} 未注册。bilibili-mcp-server 没有接入或没有连接：检查 cordis.patch.yml 里的 mcp-bilibili 条目，以及 dsh web 启动输出里 mcp-client(bilibili) 的报错。`
 }

@@ -144,9 +144,22 @@ test('bili_comment comments once per video, drafts included, and discover report
 })
 
 // ---- Explorer
-async function bootExplorer(t, { raw = {}, hour = 12 } = {}) {
+async function bootExplorer(t, { raw = {}, hour = 12, mcp = true } = {}) {
   const root = new Context()
+  await root.plugin(SystemPrompt)
+  await root.plugin(ToolRegistry)
   t.after(() => root.fiber.dispose())
+  if (mcp) {
+    for (const name of ['bilibili_search', 'bilibili_hot', 'bilibili_user_videos', 'bilibili_video_info']) {
+      root.tools.register({
+        name: `mcp__bilibili__${name}`,
+        description: name,
+        parameters: { type: 'object', properties: {} },
+        output: { schema: { type: 'object', properties: { content: { type: 'array', items: {} } }, required: ['content'], additionalProperties: false }, render: () => [] },
+        async execute() { return { content: [] } },
+      })
+    }
+  }
   const followups = []
   const restrictions = []
   const agent = {
@@ -226,4 +239,12 @@ test('config guards exploration limits', () => {
   assert.ok(tooMany.some(p => /commentsPerRound/.test(p)))
   const sameSession = configProblems(resolveSettings(Config({ explore: { sessionId: 'bili-fish-autoreply' } })))
   assert.ok(sameSession.some(p => /must differ/.test(p)))
+})
+
+test('explorer does not wake the model when bilibili-mcp is not connected', async (t) => {
+  const h = await bootExplorer(t, { mcp: false })
+  await h.explorer.tick()
+  assert.equal(h.followups.length, 0)
+  assert.match(h.explorer.status().lastError, /未接入或未连接（缺少 mcp__bilibili__bilibili_search/)
+  assert.equal(h.restrictions.length, 0, 'session not even opened')
 })
