@@ -53,6 +53,25 @@ export interface Config {
   }
   /** 同一个视频在这段时间内只评论一次（小时）。 */
   commentOncePerVideoHours: Live<number>
+  /** 肥鱼声音服务（github.com/Esmerubphire/astrbot_plugin_feiyu_voice 的 server/）。 */
+  feiyu: {
+    /** 服务地址；留空表示不使用。 */
+    baseUrl: Live<string>
+    /** 服务里配置的声音 id。 */
+    voice: Live<string>
+    /** 默认说话风格：cute（可爱）或 gentle（温柔）。 */
+    style: Live<string>
+    /** 用肥鱼声音给 bili_send_voice 合成语音（代替 ctx.tts）。 */
+    useForBiliVoice: Live<boolean>
+    /** 工具调用里最多等待生成完成的秒数，超时返回任务编号。 */
+    waitSeconds: Live<number>
+    /** API Key 文件；留空为 ~/.dsh/bili-fish/feiyu.json。 */
+    keyFile: string
+    /** 换声 / 唱歌只能读取这个文件夹里的文件；留空为 ~/.dsh/bili-fish/voice-inbox。 */
+    inputDir: string
+    /** 生成的 WAV 保存位置；留空为 ~/.dsh/bili-fish/voice-out。 */
+    outputDir: string
+  }
   explore: {
     /** 自己逛总开关，默认关闭。 */
     enabled: Live<boolean>
@@ -196,6 +215,20 @@ const ConfigSchema = Schema.object({
   }),
   commentOncePerVideoHours: Schema.natural().min(1).max(24 * 365).default(24 * 7).volatile()
     .description('同一个视频在这段时间内只评论一次（小时），默认 7 天。'),
+  feiyu: Schema.object({
+    baseUrl: Schema.string().default('').volatile()
+      .description('肥鱼声音服务地址，例如 http://127.0.0.1:9880；留空表示不使用。'),
+    voice: Schema.string().default('feiyu').volatile(),
+    style: Schema.string().default('cute').volatile()
+      .description('默认说话风格：cute（可爱）或 gentle（温柔）。'),
+    useForBiliVoice: Schema.boolean().default(true).volatile()
+      .description('配置了肥鱼声音服务时，bili_send_voice 用它合成语音。'),
+    waitSeconds: Schema.natural().min(10).max(1800).default(180).volatile()
+      .description('工具调用里最多等待生成完成的秒数，超时返回任务编号，可用 feiyu_job 取回。'),
+    keyFile: Schema.string().default(''),
+    inputDir: Schema.string().default(''),
+    outputDir: Schema.string().default(''),
+  }),
   explore: Schema.object({
     enabled: Schema.boolean().default(false).volatile()
       .description('自己逛：定时找感兴趣的视频、看完再决定要不要评论。默认关闭。'),
@@ -284,6 +317,14 @@ export function configProblems(settings: Settings): string[] {
   for (const key of ['commentsTool', 'searchTool', 'hotTool', 'userVideosTool', 'videoInfoTool', 'subtitleTool', 'danmakuTool'] as const) {
     if (!TOOL_NAME.test(settings.bilibili[key])) problems.push(`bilibili.${key} "${settings.bilibili[key]}" is not a valid tool name`)
   }
+  const fy = settings.feiyu
+  if (fy.baseUrl.trim() !== '') {
+    let url: URL | undefined
+    try { url = new URL(fy.baseUrl) } catch { problems.push(`feiyu.baseUrl "${fy.baseUrl}" is not a URL`) }
+    if (url && url.protocol !== 'http:' && url.protocol !== 'https:') problems.push('feiyu.baseUrl must be http(s)')
+  }
+  if (!/^[A-Za-z0-9_.-]{1,80}$/.test(fy.voice)) problems.push(`feiyu.voice "${fy.voice}" is not a valid voice id`)
+  if (!/^[A-Za-z0-9_-]{1,40}$/.test(fy.style)) problems.push(`feiyu.style "${fy.style}" is not a valid style`)
   const ex = settings.explore
   if (ex.activeFrom >= ex.activeTo) problems.push(`explore.activeFrom (${ex.activeFrom}) must be before explore.activeTo (${ex.activeTo})`)
   if (ex.commentsPerRound > ex.watchPerRound) problems.push('explore.commentsPerRound must not exceed explore.watchPerRound')

@@ -9,9 +9,9 @@
  */
 export const API_BASE = '/api/bili-fish'
 
-export type Endpoint = 'state' | 'save' | 'check' | 'explore' | 'login' | 'logout'
+export type Endpoint = 'state' | 'save' | 'check' | 'explore' | 'login' | 'logout' | 'feiyu-key' | 'feiyu-key-clear' | 'feiyu-test'
 
-export const ENDPOINTS: readonly Endpoint[] = ['state', 'save', 'check', 'explore', 'login', 'logout']
+export const ENDPOINTS: readonly Endpoint[] = ['state', 'save', 'check', 'explore', 'login', 'logout', 'feiyu-key', 'feiyu-key-clear', 'feiyu-test']
 
 /** Absolute route path for one endpoint, e.g. `/api/bili-fish/state`. */
 export function endpointPath(endpoint: Endpoint): string {
@@ -31,6 +31,13 @@ export interface EditableSettings {
   voiceFallback: { enabled: boolean; uploadUrl: string; template: string }
   persona: { override: string; extra: string }
   commentOncePerVideoHours: number
+  feiyu: {
+    baseUrl: string
+    voice: string
+    style: string
+    useForBiliVoice: boolean
+    waitSeconds: number
+  }
   explore: {
     enabled: boolean
     interests: string[]
@@ -113,6 +120,21 @@ export interface PanelState {
     mcpSnippet: string
   }
   recentlyCommented: string[]
+  /** Feiyu voice service: whether an API key is stored (never the key) and the local folders. */
+  feiyuLocal: { keySet: boolean; keyPath: string; inbox: string; outbox: string }
+  /** Result of the last connection test, if any. */
+  feiyuTest: FeiyuTestResult | null
+}
+
+export interface FeiyuTestResult {
+  ok: boolean
+  at: number
+  message: string
+  version?: string
+  speech?: boolean
+  conversion?: boolean
+  singing?: boolean
+  styles?: string[]
 }
 
 export interface SaveRequest {

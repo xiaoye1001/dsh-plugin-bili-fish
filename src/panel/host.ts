@@ -15,6 +15,8 @@ import { FISH_PERSONA } from '../persona.js'
 import type { ReplyPatrol } from '../autoreply/watcher.js'
 import type { Explorer } from '../explore/explorer.js'
 import { clearLogin, cookieFilePath, mcpEntrySnippet, readLoginStatus, saveLogin, validateLogin } from '../login.js'
+import { FeiyuClient } from '../feiyu/client.js'
+import { clearApiKey, feiyuPaths, readApiKey, saveApiKey, validApiKey } from '../feiyu/local.js'
 import type { BiliClient } from '../bili-client.js'
 import { resolveTts } from '../tts.js'
 import {
@@ -25,6 +27,7 @@ import {
   ENDPOINTS,
   endpointPath,
   type EditableSettings,
+  type FeiyuTestResult,
   type Endpoint,
   type PanelState,
   type RpcResult,
@@ -45,6 +48,38 @@ export interface PanelDeps {
 const ok = <T>(value: T): RpcResult<T> => ({ ok: true, value })
 const fail = <T = never>(code: string, message: string, details: object = {}): RpcResult<T> =>
   ({ ok: false, error: { code, message, details } })
+
+/** Last connection test per plugin instance (shown until the next test). */
+const lastFeiyuTest = new WeakMap<Context, FeiyuTestResult>()
+
+async function feiyuLocal(s: Settings): Promise<PanelState['feiyuLocal']> {
+  const paths = feiyuPaths(s.feiyu)
+  return { keySet: (await readApiKey(paths.keyFile)) !== '', keyPath: paths.keyFile, inbox: paths.inbox, outbox: paths.outbox }
+}
+
+async function testFeiyu(s: Settings): Promise<FeiyuTestResult> {
+  const at = Date.now()
+  if (s.feiyu.baseUrl.trim() === '') return { ok: false, at, message: '还没有填写服务地址' }
+  const key = await readApiKey(feiyuPaths(s.feiyu).keyFile)
+  const client = new FeiyuClient(s.feiyu.baseUrl, key, 10_000)
+  try {
+    const health = await client.health()
+    if (key === '') return { ok: false, at, message: `服务在线（${health.version ?? '未知版本'}），但还没有填写 API Key`, ...(health.version ? { version: health.version } : {}) }
+    const caps = await client.capabilities()
+    return {
+      ok: true,
+      at,
+      message: '连接成功',
+      ...(health.version ? { version: health.version } : {}),
+      speech: caps.tts.some(t => t.available),
+      conversion: caps.rvc.some(t => t.available),
+      singing: !!caps.singing?.available,
+      styles: [...new Set(caps.tts.filter(t => t.available).flatMap(t => t.styles ?? []))],
+    }
+  } catch (error) {
+    return { ok: false, at, message: error instanceof Error ? error.message : String(error) }
+  }
+}
 
 export async function buildState({ ctx, settings, guard, bili, entryId, patrol, explorer }: PanelDeps): Promise<PanelState> {
   const s = settings()
@@ -71,6 +106,8 @@ export async function buildState({ ctx, settings, guard, bili, entryId, patrol, 
     autoReplyStatus: patrol.status(),
     exploreStatus: explorer.status(),
     login: { ...login, mcpSnippet: mcpEntrySnippet(cookiePath) },
+    feiyuLocal: await feiyuLocal(s),
+    feiyuTest: lastFeiyuTest.get(ctx) ?? null,
     recentlyCommented: guard.recentlyCommented(),
   }
 }
@@ -92,6 +129,13 @@ function pickEditable(s: Settings): EditableSettings {
     },
     persona: { override: s.persona.override, extra: s.persona.extra },
     commentOncePerVideoHours: s.commentOncePerVideoHours,
+    feiyu: {
+      baseUrl: s.feiyu.baseUrl,
+      voice: s.feiyu.voice,
+      style: s.feiyu.style,
+      useForBiliVoice: s.feiyu.useForBiliVoice,
+      waitSeconds: s.feiyu.waitSeconds,
+    },
     explore: {
       enabled: s.explore.enabled,
       interests: [...s.explore.interests],
@@ -175,7 +219,7 @@ export function validatePatch(input: unknown): { patch: Record<string, unknown> 
   const root = obj('patch', input, [
     'sendEnabled', 'dryRunByDefault', 'maxCommentsPerDay', 'maxRepliesPerDay', 'minIntervalMs',
     'replyDedupeWindowMs', 'voiceEnabled', 'tts', 'voiceFallback', 'persona', 'autoReply',
-    'commentOncePerVideoHours', 'explore',
+    'commentOncePerVideoHours', 'explore', 'feiyu',
   ], problems)
   if (!root) return { problems }
   const patch: Record<string, unknown> = {}
@@ -218,6 +262,18 @@ export function validatePatch(input: unknown): { patch: Record<string, unknown> 
   }
   if ('commentOncePerVideoHours' in root) {
     set('commentOncePerVideoHours', int('commentOncePerVideoHours', root.commentOncePerVideoHours, 1, 24 * 365, problems))
+  }
+  if ('feiyu' in root) {
+    const f = obj('feiyu', root.feiyu, ['baseUrl', 'voice', 'style', 'useForBiliVoice', 'waitSeconds'], problems)
+    if (f) {
+      const out: Record<string, unknown> = {}
+      if ('baseUrl' in f) out.baseUrl = str('feiyu.baseUrl', f.baseUrl, 500, problems, /^https?:\/\/\S+$/)
+      if ('voice' in f) out.voice = str('feiyu.voice', f.voice, 80, problems, /^[A-Za-z0-9_.-]+$/)
+      if ('style' in f) out.style = str('feiyu.style', f.style, 40, problems, /^[A-Za-z0-9_-]+$/)
+      if ('useForBiliVoice' in f) out.useForBiliVoice = bool('feiyu.useForBiliVoice', f.useForBiliVoice, problems)
+      if ('waitSeconds' in f) out.waitSeconds = int('feiyu.waitSeconds', f.waitSeconds, 10, 1800, problems)
+      patch.feiyu = out
+    }
   }
   if ('explore' in root) {
     const e = obj('explore', root.explore, ['enabled', 'interests', 'intervalMin', 'activeFrom', 'activeTo', 'watchPerRound', 'commentsPerRound', 'send'], problems)
@@ -292,6 +348,27 @@ export async function dispatch(deps: PanelDeps, endpoint: string, payload: unkno
         } catch (error) {
           return fail('save-failed', `删除登录信息失败：${error instanceof Error ? error.message : String(error)}`)
         }
+        return ok(await buildState(deps))
+      case 'feiyu-key': {
+        // The API key goes to its own 0600 file and is never echoed back.
+        const key = (payload as { apiKey?: unknown } | null)?.apiKey
+        if (!validApiKey(key)) return fail('invalid', 'API Key 格式不对（8～512 个可见字符，不含空格）')
+        try {
+          await saveApiKey(feiyuPaths(deps.settings().feiyu).keyFile, key)
+        } catch (error) {
+          return fail('save-failed', `保存 API Key 失败：${error instanceof Error ? error.message : String(error)}`)
+        }
+        return ok(await buildState(deps))
+      }
+      case 'feiyu-key-clear':
+        try {
+          await clearApiKey(feiyuPaths(deps.settings().feiyu).keyFile)
+        } catch (error) {
+          return fail('save-failed', `删除 API Key 失败：${error instanceof Error ? error.message : String(error)}`)
+        }
+        return ok(await buildState(deps))
+      case 'feiyu-test':
+        lastFeiyuTest.set(deps.ctx, await testFeiyu(deps.settings()))
         return ok(await buildState(deps))
       case 'explore':
         // Wake the exploration session once now (still within every limit; ignores the interval, not the switch).

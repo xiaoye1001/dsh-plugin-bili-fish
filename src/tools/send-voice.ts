@@ -1,7 +1,9 @@
 import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { uploadAudio } from '../bili-client.js'
 import { SKIP_REASONS, assertVideoId, charLength, decideSend, skipped } from '../shared.js'
-import { resolveTts, synthesizeToFile } from '../tts.js'
+import { resolveTts, synthesizeToFile, type TtsService } from '../tts.js'
+import { feiyuTts } from '../feiyu/tts.js'
+import { feiyuSetup } from './feiyu.js'
 import { missingTool, type ToolDeps } from './deps.js'
 
 const VOICE_OUTPUT_SCHEMA = {
@@ -38,7 +40,7 @@ export function createSendVoiceTool({ ctx, settings, guard, bili }: ToolDeps): T
     parameters: {
       videoId: { type: 'string', required: true, description: 'B 站 BV 号或 av 号' },
       text: { type: 'string', required: true, description: '要念出来的文字，口语、短句' },
-      voice: { type: 'string', description: 'Edge TTS 音色，如 zh-CN-XiaoxiaoNeural；不传用配置里的默认音色' },
+      voice: { type: 'string', description: '用肥鱼声音时填风格 cute（可爱）或 gentle（温柔）；用 Edge TTS 时填音色如 zh-CN-XiaoxiaoNeural。不传用默认' },
       dryRun: { type: 'boolean', description: '默认 true：只生成本地音频草稿。false 才真正发送。' },
     },
     output: {
@@ -64,7 +66,15 @@ export function createSendVoiceTool({ ctx, settings, guard, bili }: ToolDeps): T
       if (decision.mode === 'skip') return decision.result
 
       // TTS is a hard requirement for this tool: no third-party fallback is bundled.
-      const tts = resolveTts(ctx, config.tts.service)
+      // 肥鱼声音服务 when configured (feiyu.useForBiliVoice), otherwise the ctx TTS service.
+      const useFeiyu = config.feiyu.useForBiliVoice && config.feiyu.baseUrl.trim() !== ''
+      let tts: TtsService | undefined
+      if (useFeiyu) {
+        const setup = await feiyuSetup(config)
+        tts = feiyuTts(setup.client, setup.cfg)
+      } else {
+        tts = resolveTts(ctx, config.tts.service)
+      }
       if (!tts) {
         throw new Error(
           `依赖缺失：未找到 TTS 服务 ctx.${config.tts.service}（需要加载 dsh-plugin-tts 并提供 synthesize()）`,
@@ -84,7 +94,7 @@ export function createSendVoiceTool({ ctx, settings, guard, bili }: ToolDeps): T
 
       const { audioPath, mime } = await synthesizeToFile(tts, {
         text,
-        voice: args.voice?.trim() || config.tts.defaultVoice,
+        voice: args.voice?.trim() || (useFeiyu ? config.feiyu.style : config.tts.defaultVoice),
         outputDir: config.tts.outputDir,
         videoId: args.videoId,
         signal: exec.signal,

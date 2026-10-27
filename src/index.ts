@@ -18,6 +18,7 @@ import { Explorer } from './explore/explorer.js'
 import { SessionDoor } from './session.js'
 import { createDiscoverTool } from './tools/discover.js'
 import { createWatchTool } from './tools/watch.js'
+import { createFeiyuTools } from './tools/feiyu.js'
 import { createBuildPromptTool } from './tools/build-prompt.js'
 import { createCommentTool } from './tools/comment.js'
 import { createReplyTool } from './tools/reply.js'
@@ -53,6 +54,7 @@ export function apply(ctx: Context, config: Config) {
   ctx.tools.register(createSendVoiceTool(deps))
   ctx.tools.register(createDiscoverTool(deps))
   ctx.tools.register(createWatchTool(deps))
+  for (const tool of createFeiyuTools(deps)) ctx.tools.register(tool)
 
   // Keep the model from calling bilibili write tools directly and skipping the guard above.
   ctx.tools.guard((execution) => {

@@ -245,6 +245,64 @@ function LoginCard({ ctx, state, onState, onNotice, readOnly }: {
   )
 }
 
+/** API key + connection test for the Feiyu voice service; the key is sent once and never read back. */
+function FeiyuKeyBox({ ctx, state, onState, onNotice }: {
+  ctx: ClientCtx
+  state: PanelState
+  onState: (s: PanelState) => void
+  onNotice: (n: { tone: 'ok' | 'error' | 'warn'; text: string }) => void
+}) {
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const local = state.feiyuLocal
+  const test = state.feiyuTest
+  const call = async (endpoint: 'feiyu-key' | 'feiyu-key-clear' | 'feiyu-test', payload: unknown, done: string) => {
+    setBusy(true)
+    try {
+      const next = await callRpc<PanelState>(ctx, endpoint, payload)
+      onState(next)
+      if (endpoint === 'feiyu-key') setKey('')
+      if (endpoint === 'feiyu-test') {
+        onNotice({ tone: next.feiyuTest?.ok ? 'ok' : 'warn', text: next.feiyuTest?.message ?? done })
+      } else {
+        onNotice({ tone: 'ok', text: done })
+      }
+    } catch (error) {
+      onNotice({ tone: 'error', text: `失败：${error instanceof Error ? error.message : String(error)}` })
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <>
+      <label style={S.block}>
+        <span>API Key <span style={S.badge(local.keySet)}>{local.keySet ? '已设置' : '未设置'}</span></span>
+        <span style={S.muted}>保存在 {local.keyPath}（仅当前用户可读），不会显示在这里。</span>
+        <input style={S.input} type="password" autoComplete="off" spellCheck={false} disabled={busy}
+          placeholder={local.keySet ? '已设置，输入新的会覆盖' : '声音服务的 API Key'} value={key} onChange={e => setKey(e.target.value)} />
+      </label>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button type="button" style={S.button(true, busy || key.trim() === '')} disabled={busy || key.trim() === ''}
+          onClick={() => { void call('feiyu-key', { apiKey: key.trim() }, 'API Key 已保存。') }}>保存 API Key</button>
+        {local.keySet && (
+          <button type="button" style={S.button(false, busy)} disabled={busy}
+            onClick={() => { if (window.confirm('删除已保存的肥鱼声音 API Key？')) void call('feiyu-key-clear', null, 'API Key 已删除。') }}>清除</button>
+        )}
+        <button type="button" style={S.button(false, busy)} disabled={busy}
+          onClick={() => { void call('feiyu-test', null, '') }}>{busy ? '…' : '测试连接'}</button>
+      </div>
+      {test && (
+        <div style={S.banner(test.ok ? 'ok' : 'warn')}>
+          {test.ok
+            ? `连接成功${test.version ? `（${test.version}）` : ''}：说话 ${test.speech ? '可用' : '未安装'}，换声 ${test.conversion ? '可用' : '未安装'}，按谱唱歌 ${test.singing ? '可用' : '未安装'}${test.styles?.length ? `；风格 ${test.styles.join('、')}` : ''}`
+            : test.message}
+        </div>
+      )}
+      <div style={S.muted}>换声 / 唱歌只能读取收件夹 {local.inbox} 里的文件；生成的音频保存在 {local.outbox}。</div>
+    </>
+  )
+}
+
 /** Fields that differ between the server copy and the draft, as a nested patch. */
 export function diffSettings(base: EditableSettings, draft: EditableSettings): Partial<EditableSettings> {
   const out: Record<string, unknown> = {}
@@ -277,6 +335,9 @@ export function localProblems(d: EditableSettings): string[] {
     if (!/^https?:\/\/\S+$/.test(d.voiceFallback.uploadUrl)) p.push('开启降级时需要填写 http(s) 上传地址')
     if (!d.voiceFallback.template.includes('{url}')) p.push('降级模板必须包含 {url}')
   }
+  if (d.feiyu.baseUrl !== '' && !/^https?:\/\/\S+$/.test(d.feiyu.baseUrl)) p.push('肥鱼声音服务地址要以 http:// 或 https:// 开头')
+  if (!/^[A-Za-z0-9_.-]{1,80}$/.test(d.feiyu.voice)) p.push('声音 ID 只能包含字母、数字、点、下划线和横线')
+  if (!(Number.isInteger(d.feiyu.waitSeconds) && d.feiyu.waitSeconds >= 10 && d.feiyu.waitSeconds <= 1800)) p.push('最多等待需在 10～1800 秒之间')
   const ex = d.explore
   if (!(Number.isInteger(ex.intervalMin) && ex.intervalMin >= 30)) p.push('自己逛的间隔不能低于 30 分钟')
   if (!(ex.activeFrom >= 0 && ex.activeTo <= 24 && ex.activeFrom < ex.activeTo)) p.push('活跃时段需要“开始”早于“结束”（0～24 点）')
@@ -482,6 +543,40 @@ export function BiliFishSection({ ctx }: { ctx: ClientCtx }) {
       </section>
 
       <LoginCard ctx={ctx} state={state} readOnly={false} onState={setState} onNotice={setNotice} />
+
+      <section style={S.card} aria-labelledby="bf-feiyu">
+        <h2 id="bf-feiyu" style={S.cardTitle}>肥鱼声音</h2>
+        <div style={S.muted}>
+          接入肥鱼声音服务（说话、换声、按谱唱歌）：先按
+          {' '}<a href="https://github.com/Esmerubphire/astrbot_plugin_feiyu_voice" target="_blank" rel="noreferrer">astrbot_plugin_feiyu_voice</a>{' '}
+          的说明在本机或局域网部署声音服务，再把地址和 API Key 填在这里。声库素材来自 B 站 UP 主星落落_oi，已获授权用于该项目。
+        </div>
+        <label style={S.block}>
+          <span>服务地址</span>
+          <input style={S.input} disabled={ro} placeholder="http://127.0.0.1:9880" value={draft.feiyu.baseUrl}
+            onChange={e => update('feiyu', { ...draft.feiyu, baseUrl: e.target.value.trim() })} />
+          <span style={S.muted}>改了地址记得先点下面的“保存”，再测试连接。留空表示不使用。</span>
+        </label>
+        <FeiyuKeyBox ctx={ctx} state={state} onState={setState} onNotice={setNotice} />
+        <Field title="默认说话风格">
+          <select aria-label="默认说话风格" style={S.input} disabled={ro} value={draft.feiyu.style}
+            onChange={e => update('feiyu', { ...draft.feiyu, style: e.target.value })}>
+            {[...new Set(['cute', 'gentle', ...(state.feiyuTest?.styles ?? []), draft.feiyu.style])].map(v => (
+              <option key={v} value={v}>{v === 'cute' ? '可爱（cute）' : v === 'gentle' ? '温柔（gentle）' : v}</option>
+            ))}
+          </select>
+        </Field>
+        <Field title="声音 ID" hint="声音服务里配置的声音，一般是 feiyu。">
+          <input aria-label="声音 ID" style={{ ...S.input, width: 160 }} disabled={ro} value={draft.feiyu.voice}
+            onChange={e => update('feiyu', { ...draft.feiyu, voice: e.target.value.trim() })} />
+        </Field>
+        <Field title="B 站语音评论也用肥鱼声音" hint="打开后 bili_send_voice 用这个服务合成语音。">
+          <Toggle label="B 站语音用肥鱼声音" checked={draft.feiyu.useForBiliVoice} disabled={ro} onChange={v => update('feiyu', { ...draft.feiyu, useForBiliVoice: v })} />
+        </Field>
+        <Field title="最多等待" hint="超过这个时间先返回任务编号，之后用 feiyu_job 取回。">
+          <NumberInput label="最多等待（秒）" value={draft.feiyu.waitSeconds} min={10} max={1800} disabled={ro} suffix="秒" onChange={v => update('feiyu', { ...draft.feiyu, waitSeconds: v })} />
+        </Field>
+      </section>
 
       <section style={S.card} aria-labelledby="bf-send">
         <h2 id="bf-send" style={S.cardTitle}>发送</h2>

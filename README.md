@@ -38,6 +38,26 @@
 2. 否则若 `voiceFallback.enabled: true`（默认关闭）→ 把音频以 multipart 上传到 `voiceFallback.uploadUrl`，从响应 JSON 的 `urlField` 取链接，按 `template` 拼进文字评论发出。
 3. 都不满足 → `{ skipped: true, reason: "voice_unsupported" }`，不会白白合成音频。
 
+## 肥鱼声音（说话 / 换声 / 按谱唱歌）
+
+移植自 [Esmerubphire/astrbot_plugin_feiyu_voice](https://github.com/Esmerubphire/astrbot_plugin_feiyu_voice) 的 AstrBot 插件：对接同一个**肥鱼声音服务**的 HTTP 接口（`/v1/speech`、`/v1/voice-conversion`、`/v1/singing`、`/v1/jobs`）。这里是按该接口重新编写的 TypeScript 客户端，没有包含原项目的代码；声音服务、模型和它们的授权都留在原项目里，需要按原项目说明另行部署（默认 `http://127.0.0.1:9880`）。
+
+声库原始音频素材来自 B 站 UP 主 [星落落_oi](https://space.bilibili.com/30584746/)，据原项目说明已取得授权用于其声库训练。
+
+| AstrBot 原版 | 本插件 |
+|---|---|
+| `/肥鱼状态` | 工具 `feiyu_status`；设置页「测试连接」 |
+| `feiyu_speak` | `feiyu_speak(text, style)`：等待生成，保存 WAV，返回文件路径 |
+| `feiyu_convert`（消息附件） | `feiyu_convert(file)`：只能读取**收件夹**里的 .wav / .flac |
+| `feiyu_sing`（消息附件） | `feiyu_sing(file, lyrics)`：只能读取**收件夹**里的 .mid / .midi / .abc |
+| `/肥鱼任务` | `feiyu_job(jobId)`：超过等待时间的任务之后取回 |
+| — | 作为 `bili_send_voice` 的语音引擎（`feiyu.useForBiliVoice`，默认开） |
+
+- **配置**：设置页「肥鱼声音」填写服务地址、API Key、默认风格（`cute` 可爱 / `gentle` 温柔）、声音 ID（默认 `feiyu`）、最多等待秒数（默认 180）。
+- **API Key**：保存在 `~/.dsh/bili-fish/feiyu.json`（权限 600），不回显，不写进 `cordis.patch.yml`。
+- **收件夹**：DSH 没有聊天附件，换声和唱歌改为读取 `~/.dsh/bili-fish/voice-inbox/` 里的文件；路径会解析软链接，跑出收件夹的一律拒绝，模型不能把本机其它文件传给服务。生成的音频保存在 `~/.dsh/bili-fish/voice-out/`。
+- **校验**：只认 32 位十六进制任务编号；下载的音频必须是 RIFF/WAV 且不超过 128 MB；不跟随重定向。
+
 ## B 站登录
 
 设置页「B 站登录」有三个输入框：SESSDATA、bili_jct、DedeUserID（浏览器登录 bilibili.com 后，F12 → Application → Cookies 里复制）。
