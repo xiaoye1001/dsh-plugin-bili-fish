@@ -58,6 +58,127 @@
 - **收件夹**：DSH 没有聊天附件，换声和唱歌改为读取 `~/.dsh/bili-fish/voice-inbox/` 里的文件；路径会解析软链接，跑出收件夹的一律拒绝，模型不能把本机其它文件传给服务。生成的音频保存在 `~/.dsh/bili-fish/voice-out/`。
 - **校验**：只认 32 位十六进制任务编号；下载的音频必须是 RIFF/WAV 且不超过 128 MB；不跟随重定向。
 
+### 部署声音服务
+
+完整步骤以原项目的 [`server/INSTALL_AGENT.md`](https://github.com/Esmerubphire/astrbot_plugin_feiyu_voice/blob/main/server/INSTALL_AGENT.md) 为准。官方只支持 NVIDIA CUDA 和 AMD ROCm 显卡；最稳的做法是在有显卡的电脑上跑服务，再用 SSH 反向隧道接到服务器：
+
+```bash
+# 在有显卡的电脑上执行，把服务器的 127.0.0.1:9880 接到本机服务
+ssh -N -R 9880:127.0.0.1:9880 root@你的服务器
+```
+
+服务跑起来后，在设置页「肥鱼声音」填 `http://127.0.0.1:9880` 和 `.runtime/voice-service/api_key.txt` 里的 API Key，点「测试连接」。
+
+### 只有 CPU 的服务器（非官方）
+
+原项目的推理代码接受 `backend: "cpu"`，TTS 依赖里也没有显卡专用包；只是安装器没开放这个选项，也没有 CPU 预设。下面的改法**没有经过原项目验证，也没在本插件实测**，出问题请别去原项目报 bug。
+
+**先看机器够不够。** 只装「说话」（TTS），换声和唱歌在 CPU 上太慢，不要装。
+
+| 配置 | 结论 |
+|---|---|
+| 2 核 / ≤ 4G | 不建议 |
+| 4 核 / 4G | 能试，但**必须加 swap**，和 DSH 抢内存，一条语音估计几分钟 |
+| 4 核以上 / 8G 以上 | 比较现实，一条短句估计 1～3 分钟 |
+
+服务每个任务都会新起一个进程重新加载模型，所以每条语音都要加上加载时间；代码里固定用 4 个线程，核数再多也不会更快。B 站语音一天只发几条，慢一点能接受。
+
+**1. 4G 内存先加 swap**（已有足够 swap 可跳过）：
+
+```bash
+sudo fallocate -l 6G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+free -h   # Swap 一行应显示 6.0Gi
+```
+
+**2. 准备 Python 3.11 和源码**（不要替换系统 Python）：
+
+```bash
+sudo apt install -y git git-lfs ffmpeg build-essential
+curl -LsSf https://astral.sh/uv/install.sh | sh   # 已装 uv 可跳过
+uv python install 3.11.17
+git clone https://github.com/Esmerubphire/astrbot_plugin_feiyu_voice.git
+cd astrbot_plugin_feiyu_voice/server
+```
+
+**3. 让安装器认 CPU**：新建 `runtime_profiles/cpu.json`：
+
+```json
+{
+  "schema": "feiyu-environment-preset-v1",
+  "backend": "cpu",
+  "python": "3.11",
+  "torch_index": "https://download.pytorch.org/whl/cpu",
+  "engines": {
+    "tts": {"torch": "2.11.0+cpu", "torchaudio": "2.11.0+cpu", "precision": "float32", "torchcodec": "0.11.0+cpu"}
+  },
+  "hardware_validation": "CPU, unofficial"
+}
+```
+
+再把 `cpu` 加进安装器的可选后端（以后 `git pull` 会被覆盖，需要重做）：
+
+```bash
+sed -i 's/choices=("cuda", "rocm")/choices=("cuda", "rocm", "cpu")/' scripts/setup_runtime.py
+```
+
+**4. 安装 TTS 推理环境**：
+
+```bash
+feiyu_python="$(uv python find 3.11.17)"
+"$feiyu_python" scripts/setup_runtime.py --backend cpu --engine tts \
+  --python "$feiyu_python" --destination "$HOME/.local/share/feiyu-voice/cpu/tts"
+cp "$HOME/.local/share/feiyu-voice/cpu/tts/runtime.local.json" configs/runtime.tts.cpu.local.json
+```
+
+最后的诊断会在 CPU 上跑一遍矩阵、卷积和 FFT，通过才算装好。
+
+**5. 下载模型**到 `models/FeiyuVoice-CosyVoice3`（[Hugging Face](https://huggingface.co/Esmerubphire/FeiyuVoice-CosyVoice3) / 国内用 [ModelScope](https://modelscope.cn/models/Esmerubphire/FeiyuVoice-CosyVoice3)），保持包内目录结构：
+
+```bash
+git lfs install
+git clone https://www.modelscope.cn/Esmerubphire/FeiyuVoice-CosyVoice3.git models/FeiyuVoice-CosyVoice3
+```
+
+**6. 写服务配置** `configs/voice_service.json`，只留 TTS：
+
+```json
+{
+  "schema": "feiyu-voice-service-v1",
+  "data_dir": ".runtime/voice-service",
+  "max_queue": 4,
+  "max_upload_mb": 128,
+  "tts": {
+    "feiyu": {
+      "engine": "cosyvoice3_release",
+      "package": "models/FeiyuVoice-CosyVoice3",
+      "runtime_profile": "configs/runtime.tts.cpu.local.json"
+    }
+  },
+  "rvc": {},
+  "singing": null
+}
+```
+
+**7. 安装并启动 API**（API 自己是单独的轻量环境）：
+
+```bash
+"$feiyu_python" -m venv .venv
+.venv/bin/python -m pip install -r requirements-service.txt
+.venv/bin/python -m feiyu_voice_service --config configs/voice_service.json --host 127.0.0.1 --port 9880
+```
+
+只监听 `127.0.0.1`，不要对公网开放。需要常驻可以写成 systemd 服务或放进 `tmux`。
+
+**8. 插件设置页**「肥鱼声音」：
+
+- 服务地址 `http://127.0.0.1:9880`，API Key 填 `.runtime/voice-service/api_key.txt` 的内容，点「测试连接」。
+- **最多等待调到 600 秒**（4 核 4G 建议值；默认 180 秒在 CPU 上多半等不完）。超时的任务服务端还会继续跑（上限 30 分钟），之后可以用 `feiyu_job` 取回。
+- 先用 `feiyu_speak` 说一句短话试试，看 `.runtime/voice-service/jobs/<任务编号>/worker.log` 有没有内存不足被杀；`dmesg | grep -i oom` 也能看到。
+
 ## B 站登录
 
 设置页「B 站登录」有三个输入框：SESSDATA、bili_jct、DedeUserID（浏览器登录 bilibili.com 后，F12 → Application → Cookies 里复制）。
